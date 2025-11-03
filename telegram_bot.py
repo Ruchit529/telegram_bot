@@ -14,7 +14,7 @@ from googletrans import Translator
 from telegram.error import TelegramError
 
 # === CONFIGURATION ===
-BOT_TOKEN = os.getenv("BOT_TOKEN") or "YOUR_BOT_TOKEN_HERE"
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_IDS = ["-1003052492544", "-1003238213356"]
 ALLOWED_USER = 7173549132  # 👈 your Telegram user ID (only you can use the bot)
 
