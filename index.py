@@ -16,9 +16,9 @@ from telegram.ext import (
 from googletrans import Translator
 
 # === CONFIGURATION ===
-BOT_TOKEN = os.getenv("BOT_TOKEN") or "YOUR_BOT_TOKEN_HERE"
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 ALLOWED_USERS = [7173549132]  # 👈 replace with your Telegram user ID
-CHANNEL_IDS = ["-1003052492544"]  # add your channels here
+CHANNEL_IDS = ["-1003052492544",[1003238213356]  # add your channels here
 SELF_URL = os.getenv("SELF_URL", "https://yourapp.onrender.com")  # Render URL for self-ping
 
 translator = Translator()
