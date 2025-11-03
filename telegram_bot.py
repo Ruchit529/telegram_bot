@@ -18,8 +18,8 @@ from googletrans import Translator
 # === CONFIGURATION ===
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ALLOWED_USERS = [7173549132]  # 👈 replace with your Telegram user ID
-CHANNEL_IDS = ["-1003052492544"],["-1003238213356"]  # add your channels here
-SELF_URL = os.getenv("SELF_URL", "https://telegram-bot-w8pe.onrender.com")  # Render URL for self-ping
+CHANNEL_IDS = ["-1003052492544", "-1003238213356"]  # 👈 add your channels here
+SELF_URL = os.getenv("SELF_URL", "https://telegram-bot-w8pe.onrender.com")  # 👈 your Render URL
 
 translator = Translator()
 
@@ -112,10 +112,7 @@ async def run_bot():
     app_tg.add_handler(CallbackQueryHandler(handle_confirmation))
 
     print("🚀 Telegram bot is running...")
-    await app_tg.initialize()
-    await app_tg.start()
-    await app_tg.updater.start_polling()
-    await asyncio.Event().wait()
+    await app_tg.run_polling()
 
 # === KEEP-ALIVE SELF PING ===
 def self_ping():
@@ -132,6 +129,8 @@ def self_ping():
 
 # === MAIN ===
 if __name__ == "__main__":
-    threading.Thread(target=lambda: app_web.run(host="0.0.0.0", port=int(os.getenv("PORT", 10000)), debug=False, use_reloader=False)).start()
+    threading.Thread(
+        target=lambda: app_web.run(host="0.0.0.0", port=int(os.getenv("PORT", 10000)), debug=False, use_reloader=False)
+    ).start()
     threading.Thread(target=self_ping, daemon=True).start()
     asyncio.run(run_bot())
