@@ -2,7 +2,7 @@ from telegram import Update, Bot
 from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes, CommandHandler
 import os
 # === Configuration ===
-BOT_TOKEN = "os.getenv("BOT_TOKEN")"
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_IDS = [
     "-1003052492544",  # Add more channel IDs here
 ]
@@ -60,5 +60,6 @@ app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, broadcast))
 # === Run the bot ===
 print("🚀 Bot is running... send it a message, photo, or video in Telegram!")
 app.run_polling()
+
 
 
