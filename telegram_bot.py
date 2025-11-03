@@ -13,12 +13,10 @@ from telegram.ext import (
 
 # === CONFIGURATION ===
 BOT_TOKEN = os.getenv("BOT_TOKEN") or "YOUR_BOT_TOKEN_HERE"
-CHANNEL_IDS = ["-1003052492544"]
+CHANNEL_IDS = ["-1003052492544"]  # Add more if needed
+ALLOWED_USERS = [7173549132]  # Replace with your own Telegram ID
 
-# ✅ Only allow specific Telegram users
-ALLOWED_USERS = [7173549132]
-
-# === SIMPLE FLASK WEB SERVER ===
+# === FLASK SERVER (for Render ping) ===
 app_web = Flask(__name__)
 
 @app_web.route('/')
@@ -30,15 +28,23 @@ def run_web():
     print(f"🌐 Web server running on port {port}")
     app_web.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 
-# === TELEGRAM BOT LOGIC ===
+# === TELEGRAM BOT ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     if user_id not in ALLOWED_USERS:
         await update.message.reply_text("🚫 Sorry, you are not authorized to use this bot.")
         return
+    await update.message.reply_text("👋 Hi! Send me any message, photo, or video — I’ll post it to your channels.")
 
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bot = Bot(token=BOT_TOKEN)
+    user_id = update.message.from_user.id
+
+    # Restrict unauthorized users
+    if user_id not in ALLOWED_USERS:
+        await update.message.reply_text("🚫 You are not authorized to use this bot.")
+        return
+
     sent = False
 
     if update.message.text:
@@ -76,6 +82,5 @@ async def run_bot():
     await asyncio.Event().wait()  # Keeps bot running forever
 
 if __name__ == "__main__":
-    # Run web + bot together safely
     threading.Thread(target=run_web).start()
     asyncio.run(run_bot())
