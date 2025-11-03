@@ -1,4 +1,4 @@
 python-telegram-bot
-Flask==
+Flask
 googletrans==4.0.0-rc1
 requests==2.31.0
