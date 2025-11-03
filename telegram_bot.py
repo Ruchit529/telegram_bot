@@ -15,6 +15,9 @@ from telegram.ext import (
 BOT_TOKEN = os.getenv("BOT_TOKEN") or "YOUR_BOT_TOKEN_HERE"
 CHANNEL_IDS = ["-1003052492544"]
 
+# ✅ Only allow specific Telegram users
+ALLOWED_USERS = [7173549132]
+
 # === SIMPLE FLASK WEB SERVER ===
 app_web = Flask(__name__)
 
@@ -29,7 +32,10 @@ def run_web():
 
 # === TELEGRAM BOT LOGIC ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 Hi! Send me any message, photo, or video — I’ll post it to all channels.")
+    user_id = update.message.from_user.id
+    if user_id not in ALLOWED_USERS:
+        await update.message.reply_text("🚫 Sorry, you are not authorized to use this bot.")
+        return
 
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bot = Bot(token=BOT_TOKEN)
