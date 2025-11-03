@@ -16,7 +16,9 @@ def home():
     return "✅ Telegram bot is running on Render!"
 
 def run_web():
-    app_web.run(host="0.0.0.0", port=10000)
+    port = int(os.getenv("PORT", 10000))  # Use Render’s PORT if available
+    app_web.run(host="0.0.0.0", port=port)
+
 
 # === Telegram Bot Logic ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -49,3 +51,4 @@ def run_bot():
 if __name__ == "__main__":
     threading.Thread(target=run_web).start()
     threading.Thread(target=run_bot).start()
+
