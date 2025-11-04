@@ -19,7 +19,7 @@ from telegram.error import TelegramError
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_IDS = ["-1003052492544", "-1003238213356"]  # Your channel IDs
 ALLOWED_USERS = [7173549132]  # ✅ Replace with your Telegram user ID
-SELF_URL = os.getenv("SELF_URL", "https://your-render-app.onrender.com")  # ⚠️ Replace with your Render URL
+SELF_URL = os.getenv("SELF_URL", "https://telegram_bot_w8pe.onrender.com")  # ⚠️ Replace with your Render URL
 
 translator = GoogleTranslator(source="auto", target="en")
 
