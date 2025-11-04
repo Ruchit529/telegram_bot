@@ -122,9 +122,3 @@ if __name__ == "__main__":
     threading.Thread(target=run_web).start()
     threading.Thread(target=ping_self, daemon=True).start()
     asyncio.run(run_bot())
-
-try:
-    await app_tg.updater.start_polling()
-except Exception as e:
-    print(f"⚠️ Polling stopped or conflict: {e}")
-
