@@ -78,86 +78,56 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     photo = update.message.photo
     video = update.message.video
 
-    # === Handle confirmations ===
+    # === EDIT OR CONFIRM HANDLING ===
     if user_id in pending_messages:
         response = (update.message.text or "").strip()
-        data = pending_messages[user_id]
 
-        # --- Confirm Send ---
+        # --- Confirm ---
         if response.lower() in ["yes", "y", "ok", "send"]:
+            data = pending_messages[user_id]
             for cid in CHANNEL_IDS:
                 try:
                     if data["type"] == "text":
-                        await context.bot.send_message(chat_id=cid, text=data["text"], parse_mode="Markdown")
+                        await context.bot.send_message(chat_id=cid, text=data["text"])
                     elif data["type"] == "photo":
-                        await context.bot.send_photo(chat_id=cid, photo=data["file_id"], caption=data["text"], parse_mode="Markdown")
+                        await context.bot.send_photo(chat_id=cid, photo=data["file_id"], caption=data["text"])
                     elif data["type"] == "video":
-                        await context.bot.send_video(chat_id=cid, video=data["file_id"], caption=data["text"], parse_mode="Markdown")
+                        await context.bot.send_video(chat_id=cid, video=data["file_id"], caption=data["text"])
                 except TelegramError:
                     pass
 
-            # ✅ Edit original confirmation message
-            if "msg" in data:
-                try:
-                    await data["msg"].edit_caption("✅ *Sent to all channels!*", parse_mode="Markdown")
-                except Exception:
-                    await data["msg"].edit_text("✅ *Sent to all channels!*", parse_mode="Markdown")
-
+            await update.message.reply_text("✅ Sent to all channels!")
             del pending_messages[user_id]
             return
 
         # --- Cancel ---
         elif response.lower() in ["no", "n", "cancel"]:
-            if "msg" in data:
-                try:
-                    await data["msg"].edit_caption("❌ *Cancelled.*", parse_mode="Markdown")
-                except Exception:
-                    await data["msg"].edit_text("❌ *Cancelled.*", parse_mode="Markdown")
+            await update.message.reply_text("❌ Cancelled.")
             del pending_messages[user_id]
             return
 
-        # --- Edit Message Text ---
+        # --- Edit (any other text) ---
         else:
-            data["text"] = response
-            if "msg" in data:
-                try:
-                    await data["msg"].edit_caption(f"{response}\n\n_Send to channel? (Yes / No)_", parse_mode="Markdown")
-                except Exception:
-                    await data["msg"].edit_text(f"{response}\n\n_Send to channel? (Yes / No)_", parse_mode="Markdown")
+            pending_messages[user_id]["text"] = response
+            await update.message.reply_text(f"✏️ Updated text:\n\n{response}\n\nNow reply 'Yes' to send.")
             return
 
-    # === NEW MESSAGE ===
+    # === NEW MESSAGE HANDLING ===
     translated_text = translator.translate(text) if text else ""
 
-    sent_msg = None
     if photo:
         file_id = photo[-1].file_id
-        sent_msg = await update.message.reply_photo(
-            photo=file_id,
-            caption=f"{translated_text}\n\n_Send to channel? (Yes / No)_",
-            parse_mode="Markdown"
-        )
-        pending_messages[user_id] = {"type": "photo", "file_id": file_id, "text": translated_text, "msg": sent_msg, "time": time.time()}
-
+        pending_messages[user_id] = {"type": "photo", "file_id": file_id, "text": translated_text, "time": time.time()}
+        await update.message.reply_photo(photo=file_id, caption=f"{translated_text}\n\nSend to channel? (Yes / No)")
     elif video:
         file_id = video.file_id
-        sent_msg = await update.message.reply_video(
-            video=file_id,
-            caption=f"{translated_text}\n\n_Send to channel? (Yes / No)_",
-            parse_mode="Markdown"
-        )
-        pending_messages[user_id] = {"type": "video", "file_id": file_id, "text": translated_text, "msg": sent_msg, "time": time.time()}
-
+        pending_messages[user_id] = {"type": "video", "file_id": file_id, "text": translated_text, "time": time.time()}
+        await update.message.reply_video(video=file_id, caption=f"{translated_text}\n\nSend to channel? (Yes / No)")
     elif text:
-        sent_msg = await update.message.reply_text(
-            f"{translated_text}\n\n_Send to channel? (Yes / No)_",
-            parse_mode="Markdown"
-        )
-        pending_messages[user_id] = {"type": "text", "text": translated_text, "msg": sent_msg, "time": time.time()}
-
+        pending_messages[user_id] = {"type": "text", "text": translated_text, "time": time.time()}
+        await update.message.reply_text(f"{translated_text}\n\nSend to channel? (Yes / No)")
     else:
         await update.message.reply_text("⚠️ Please send text, image, or video.")
-
 
 # === BOT RUNNER ===
 async def run_bot():
@@ -166,7 +136,10 @@ async def run_bot():
     app_tg.add_handler(MessageHandler(filters.TEXT | filters.PHOTO | filters.VIDEO, handle_message))
 
     print("🚀 Telegram bot is running...")
-    await app_tg.run_polling(close_loop=False)
+    await app_tg.initialize()
+    await app_tg.start()
+    await app_tg.updater.start_polling()
+    await asyncio.Event().wait()
 
 
 # === MAIN ===
