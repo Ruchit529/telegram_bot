@@ -1,6 +1,8 @@
 import os
 import asyncio
 import threading
+import time
+import requests
 from flask import Flask
 from telegram import Update, Bot
 from telegram.ext import (
@@ -17,8 +19,10 @@ from telegram.error import TelegramError
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_IDS = ["-1003052492544", "-1003238213356"]  # Your channel IDs
 ALLOWED_USERS = [7173549132]  # ✅ Replace with your Telegram user ID
+SELF_URL = os.getenv("SELF_URL", "https://your-render-app.onrender.com")  # ⚠️ Replace with your Render URL
 
 translator = GoogleTranslator(source="auto", target="en")
+pending_messages = {}
 
 # === SIMPLE FLASK WEB SERVER ===
 app_web = Flask(__name__)
@@ -32,14 +36,22 @@ def run_web():
     print(f"🌐 Web server running on port {port}")
     app_web.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 
+# === KEEP ALIVE PING SYSTEM ===
+def ping_self():
+    while True:
+        try:
+            res = requests.get(SELF_URL)
+            print(f"🔁 Pinged {SELF_URL} | Status: {res.status_code}")
+        except Exception as e:
+            print(f"⚠️ Ping failed: {e}")
+        time.sleep(300)  # every 5 minutes
+
 # === TELEGRAM BOT LOGIC ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     if user_id not in ALLOWED_USERS:
         return await update.message.reply_text("🚫 You are not authorized to use this bot.")
     await update.message.reply_text("👋 Hi! Send me text, photo, or video — I’ll translate and ask before posting.")
-
-pending_messages = {}
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
@@ -105,6 +117,8 @@ async def run_bot():
     await app_tg.updater.start_polling()
     await asyncio.Event().wait()
 
+# === MAIN ===
 if __name__ == "__main__":
     threading.Thread(target=run_web).start()
+    threading.Thread(target=ping_self, daemon=True).start()
     asyncio.run(run_bot())
