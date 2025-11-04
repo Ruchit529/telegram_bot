@@ -9,6 +9,7 @@ from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
+    EditedMessageHandler,
     ContextTypes,
     filters,
 )
@@ -22,11 +23,83 @@ ALLOWED_USERS = [7173549132]  # ✅ Replace with your Telegram user ID
 SELF_URL = os.getenv("SELF_URL", "https://telegram_bot_w8pe.onrender.com")  # ⚠️ Replace with your Render URL
 
 translator = GoogleTranslator(source="auto", target="en")
-
 pending_messages = {}
-MESSAGE_TIMEOUT = 120  # Auto-clear old confirmations after 2 minutes
 
+# === SIMPLE FLASK WEB SERVER ===
+app_web = Flask(__name__)
 
+@app_web.route('/')
+def home():
+    return "✅ Telegram bot is running on Render!", 200
+
+def run_web():
+    port = int(os.getenv("PORT", 10000))
+    print(f"🌐 Web server running on port {port}")
+    app_web.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+
+# === KEEP ALIVE PING ===
+def ping_self():
+    while True:
+        try:
+            res = requests.get(SELF_URL)
+            print(f"🔁 Pinged {SELF_URL} | Status: {res.status_code}")
+        except Exception as e:
+            print(f"⚠️ Ping failed: {e}")
+        time.sleep(300)
+
+# === CLEANUP LOOP (2 min) ===
+def cleanup_loop():
+    while True:
+        now = time.time()
+        for uid in list(pending_messages.keys()):
+            if now - pending_messages[uid]["time"] > 120:  # 2 minutes
+                try:
+                    del pending_messages[uid]
+                    print(f"🕒 Cleared pending message for {uid} (expired)")
+                except KeyError:
+                    pass
+        time.sleep(30)
+
+# === TELEGRAM HANDLERS ===
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ALLOWED_USERS:
+        return await update.message.reply_text("🚫 You are not authorized to use this bot.")
+    await update.message.reply_text("👋 Send text, photo, or video — I’ll translate and confirm before posting.")
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id not in ALLOWED_USERS:
+        return await update.message.reply_text("🚫 You are not authorized to use this bot.")
+
+    text = update.message.caption or update.message.text
+    photo = update.message.photo
+    video = update.message.video
+
+    # === If user already has a pending message ===
+    if user_id in pending_messages:
+        response = (update.message.text or "").strip().lower()
+
+        if response in ["yes", "y", "ok", "send"]:
+            data = pending_messages[user_id]
+            for cid in CHANNEL_IDS:
+                try:
+                    if data["type"] == "text":
+                        await context.bot.send_message(chat_id=cid, text=data["text"], parse_mode="MarkdownV2")
+                    elif data["type"] == "photo":
+                        await context.bot.send_photo(chat_id=cid, photo=data["file_id"], caption=data["text"], parse_mode="MarkdownV2")
+                    elif data["type"] == "video":
+                        await context.bot.send_video(chat_id=cid, video=data["file_id"], caption=data["text"], parse_mode="MarkdownV2")
+                except TelegramError as e:
+                    print(f"⚠️ Send failed: {e}")
+
+            await update.message.reply_text("✅ Sent to all channels!")
+            del pending_messages[user_id]
+            return
+
+        elif response in ["no", "n", "cancel"]:
+            await update.message.reply_text("❌ Cancelled.")
+            del pending_messages[user_id]
+            return
 
         else:
             # Treat any other text as updated message content
