@@ -4,16 +4,11 @@ import threading
 import time
 import requests
 from flask import Flask
-from telegram import (
-    Update,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-)
+from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
-    CallbackQueryHandler,
     ContextTypes,
     filters,
 )
@@ -29,10 +24,9 @@ SELF_URL = os.getenv("SELF_URL", "https://telegram_bot_w8pe.onrender.com")
 
 translator = GoogleTranslator(source="auto", target="en")
 pending_messages = {}
-MESSAGE_TIMEOUT = 120
+MESSAGE_TIMEOUT = 120  # Auto-clear old confirmations after 2 minutes
 
-
-# === FLASK WEB SERVER ===
+# === SIMPLE FLASK WEB SERVER ===
 app_web = Flask(__name__)
 
 @app_web.route('/')
@@ -44,176 +38,126 @@ def run_web():
     print(f"🌐 Web server running on port {port}")
     app_web.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 
-
-# === KEEP ALIVE ===
+# === KEEP ALIVE PING SYSTEM ===
 def ping_self():
     while True:
         try:
-            requests.get(SELF_URL)
-        except Exception:
-            pass
+            res = requests.get(SELF_URL)
+            print(f"🔁 Pinged {SELF_URL} | Status: {res.status_code}")
+        except Exception as e:
+            print(f"⚠️ Ping failed: {e}")
         time.sleep(300)
 
-
-# === CLEANUP ===
+# === CLEANUP FUNCTION ===
 def cleanup_pending():
     now = time.time()
-    for uid in list(pending_messages.keys()):
-        if now - pending_messages[uid]["time"] > MESSAGE_TIMEOUT:
-            del pending_messages[uid]
+    to_delete = [uid for uid, data in pending_messages.items() if now - data["time"] > MESSAGE_TIMEOUT]
+    for uid in to_delete:
+        del pending_messages[uid]
 
-
-# === BOT COMMANDS ===
+# === TELEGRAM BOT LOGIC ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.from_user.id not in ALLOWED_USERS:
-        return await update.message.reply_text("🚫 You are not authorized to use this bot.")
-    await update.message.reply_text("👋 Hi! Send me text, photo, or video — I’ll translate and preview before posting.")
-
-
-# === HANDLE MESSAGES ===
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    cleanup_pending()
     user_id = update.message.from_user.id
     if user_id not in ALLOWED_USERS:
-        return await update.message.reply_text("🚫 You are not authorized.")
+        return await update.message.reply_text("🚫 You are not authorized to use this bot.")
+    await update.message.reply_text("👋 Hi! Send me text, photo, or video — I’ll translate and ask before posting.")
 
-    text = update.message.caption or update.message.text
-    photo = update.message.photo
-    video = update.message.video
+async def process_message(message, context):
+    """Handles both normal and edited messages."""
+    user_id = message.from_user.id
+    cleanup_pending()
+
+    if user_id not in ALLOWED_USERS:
+        await message.reply_text("🚫 You are not authorized to use this bot.")
+        return
+
+    text = message.caption or message.text
+    photo = message.photo
+    video = message.video
+
+    # === EDIT OR CONFIRM HANDLING ===
+    if user_id in pending_messages:
+        response = (message.text or "").strip()
+        data = pending_messages[user_id]
+
+        # --- Confirm ---
+        if response.lower() in ["yes", "y", "ok", "send"]:
+            for cid in CHANNEL_IDS:
+                try:
+                    if data["type"] == "text":
+                        await context.bot.send_message(chat_id=cid, text=data["text"], parse_mode=ParseMode.MARKDOWN)
+                    elif data["type"] == "photo":
+                        await context.bot.send_photo(chat_id=cid, photo=data["file_id"], caption=data["text"], parse_mode=ParseMode.MARKDOWN)
+                    elif data["type"] == "video":
+                        await context.bot.send_video(chat_id=cid, video=data["file_id"], caption=data["text"], parse_mode=ParseMode.MARKDOWN)
+                except TelegramError:
+                    pass
+            await message.reply_text("✅ Sent to all channels!")
+            del pending_messages[user_id]
+            return
+
+        # --- Cancel ---
+        elif response.lower() in ["no", "n", "cancel"]:
+            await message.reply_text("❌ Cancelled.")
+            del pending_messages[user_id]
+            return
+
+        # --- Text updated (either by edit or typing) ---
+        else:
+            data["text"] = response
+            pending_messages[user_id] = data
+            if data["type"] == "text":
+                await message.reply_text(
+                    f"✏️ *Updated text:*\n{response}\n\nSend to channel? (Yes / No)",
+                    parse_mode=ParseMode.MARKDOWN
+                )
+            else:
+                try:
+                    if data["type"] == "photo":
+                        await message.reply_photo(photo=data["file_id"], caption=f"{response}\n\nSend to channel? (Yes / No)", parse_mode=ParseMode.MARKDOWN)
+                    elif data["type"] == "video":
+                        await message.reply_video(video=data["file_id"], caption=f"{response}\n\nSend to channel? (Yes / No)", parse_mode=ParseMode.MARKDOWN)
+                except TelegramError:
+                    await message.reply_text(
+                        f"✏️ *Updated text:*\n{response}\n\nSend to channel? (Yes / No)",
+                        parse_mode=ParseMode.MARKDOWN
+                    )
+            return
+
+    # === NEW MESSAGE HANDLING ===
     translated_text = translator.translate(text) if text else ""
 
-    # store message data
     if photo:
         file_id = photo[-1].file_id
-        sent = await update.message.reply_photo(
-            photo=file_id,
-            caption=f"*{translated_text}*\n\n✅ Send / ✏️ Edit / ❌ Cancel?",
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("✅ Send", callback_data="send")],
-                [InlineKeyboardButton("✏️ Edit", callback_data="edit")],
-                [InlineKeyboardButton("❌ Cancel", callback_data="cancel")],
-            ]),
-        )
-        pending_messages[user_id] = {
-            "type": "photo", "file_id": file_id, "text": translated_text,
-            "msg_id": sent.message_id, "chat_id": sent.chat.id, "time": time.time()
-        }
+        pending_messages[user_id] = {"type": "photo", "file_id": file_id, "text": translated_text, "time": time.time()}
+        await message.reply_photo(photo=file_id, caption=f"{translated_text}\n\nSend to channel? (Yes / No)", parse_mode=ParseMode.MARKDOWN)
 
     elif video:
         file_id = video.file_id
-        sent = await update.message.reply_video(
-            video=file_id,
-            caption=f"*{translated_text}*\n\n✅ Send / ✏️ Edit / ❌ Cancel?",
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("✅ Send", callback_data="send")],
-                [InlineKeyboardButton("✏️ Edit", callback_data="edit")],
-                [InlineKeyboardButton("❌ Cancel", callback_data="cancel")],
-            ]),
-        )
-        pending_messages[user_id] = {
-            "type": "video", "file_id": file_id, "text": translated_text,
-            "msg_id": sent.message_id, "chat_id": sent.chat.id, "time": time.time()
-        }
+        pending_messages[user_id] = {"type": "video", "file_id": file_id, "text": translated_text, "time": time.time()}
+        await message.reply_video(video=file_id, caption=f"{translated_text}\n\nSend to channel? (Yes / No)", parse_mode=ParseMode.MARKDOWN)
 
     elif text:
-        sent = await update.message.reply_text(
-            f"*{translated_text}*\n\n✅ Send / ✏️ Edit / ❌ Cancel?",
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("✅ Send", callback_data="send")],
-                [InlineKeyboardButton("✏️ Edit", callback_data="edit")],
-                [InlineKeyboardButton("❌ Cancel", callback_data="cancel")],
-            ]),
-        )
-        pending_messages[user_id] = {
-            "type": "text", "text": translated_text,
-            "msg_id": sent.message_id, "chat_id": sent.chat.id, "time": time.time()
-        }
+        pending_messages[user_id] = {"type": "text", "text": translated_text, "time": time.time()}
+        await message.reply_text(f"{translated_text}\n\nSend to channel? (Yes / No)", parse_mode=ParseMode.MARKDOWN)
+    else:
+        await message.reply_text("⚠️ Please send text, image, or video.")
 
+# Normal messages
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await process_message(update.message, context)
 
-# === HANDLE INLINE BUTTONS ===
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    user_id = query.from_user.id
-    await query.answer()
-
-    if user_id not in pending_messages:
-        return await query.edit_message_text("⚠️ No pending message found.")
-
-    data = pending_messages[user_id]
-
-    if query.data == "cancel":
-        await query.edit_message_text("❌ Cancelled.")
-        del pending_messages[user_id]
-
-    elif query.data == "send":
-        for cid in CHANNEL_IDS:
-            try:
-                if data["type"] == "text":
-                    await context.bot.send_message(chat_id=cid, text=data["text"], parse_mode=ParseMode.MARKDOWN)
-                elif data["type"] == "photo":
-                    await context.bot.send_photo(chat_id=cid, photo=data["file_id"], caption=data["text"], parse_mode=ParseMode.MARKDOWN)
-                elif data["type"] == "video":
-                    await context.bot.send_video(chat_id=cid, video=data["file_id"], caption=data["text"], parse_mode=ParseMode.MARKDOWN)
-            except TelegramError:
-                pass
-        await query.edit_message_text("✅ Sent to all channels!")
-        del pending_messages[user_id]
-
-    elif query.data == "edit":
-        await query.edit_message_text("✏️ Please send your *new text or caption* below:", parse_mode=ParseMode.MARKDOWN)
-        pending_messages[user_id]["await_edit"] = True
-
-
-# === HANDLE EDIT TEXT ===
+# Edited messages
 async def handle_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    if user_id not in pending_messages or not pending_messages[user_id].get("await_edit"):
-        return
+    if update.edited_message:
+        await process_message(update.edited_message, context)
 
-    new_text = update.message.text
-    data = pending_messages[user_id]
-    data["text"] = new_text
-    data["await_edit"] = False
-
-    # Edit the original preview message instead of resending
-    try:
-        await context.bot.edit_message_caption(
-            chat_id=data["chat_id"],
-            message_id=data["msg_id"],
-            caption=f"*{new_text}*\n\n✅ Send / ✏️ Edit / ❌ Cancel?",
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("✅ Send", callback_data="send")],
-                [InlineKeyboardButton("✏️ Edit", callback_data="edit")],
-                [InlineKeyboardButton("❌ Cancel", callback_data="cancel")],
-            ]),
-        )
-    except TelegramError:
-        await context.bot.edit_message_text(
-            chat_id=data["chat_id"],
-            message_id=data["msg_id"],
-            text=f"*{new_text}*\n\n✅ Send / ✏️ Edit / ❌ Cancel?",
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("✅ Send", callback_data="send")],
-                [InlineKeyboardButton("✏️ Edit", callback_data="edit")],
-                [InlineKeyboardButton("❌ Cancel", callback_data="cancel")],
-            ]),
-        )
-
-    await update.message.reply_text("✅ Text updated!")
-
-
-# === MAIN RUNNER ===
+# === BOT RUNNER ===
 async def run_bot():
     app_tg = ApplicationBuilder().token(BOT_TOKEN).build()
     app_tg.add_handler(CommandHandler("start", start))
-    app_tg.add_handler(CallbackQueryHandler(button_handler))
-    app_tg.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_edit))
-    app_tg.add_handler(MessageHandler(filters.ALL, handle_message))
+    app_tg.add_handler(MessageHandler(filters.TEXT | filters.PHOTO | filters.VIDEO, handle_message))
+    app_tg.add_handler(MessageHandler(filters.UpdateType.EDITED_MESSAGE, handle_edit))
 
     print("🚀 Telegram bot is running...")
     await app_tg.initialize()
@@ -221,7 +165,7 @@ async def run_bot():
     await app_tg.updater.start_polling()
     await asyncio.Event().wait()
 
-
+# === MAIN ===
 if __name__ == "__main__":
     threading.Thread(target=run_web).start()
     threading.Thread(target=ping_self, daemon=True).start()
