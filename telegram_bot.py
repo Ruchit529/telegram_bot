@@ -9,7 +9,6 @@ from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
-    EditedMessageHandler,
     ContextTypes,
     filters,
 )
@@ -37,7 +36,7 @@ def run_web():
     print(f"🌐 Web server running on port {port}")
     app_web.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 
-# === KEEP ALIVE PING ===
+# === KEEP ALIVE PING SYSTEM ===
 def ping_self():
     while True:
         try:
@@ -45,29 +44,24 @@ def ping_self():
             print(f"🔁 Pinged {SELF_URL} | Status: {res.status_code}")
         except Exception as e:
             print(f"⚠️ Ping failed: {e}")
-        time.sleep(300)
+        time.sleep(300)  # every 5 minutes
 
-# === CLEANUP LOOP (2 min) ===
-def cleanup_loop():
-    while True:
-        now = time.time()
-        for uid in list(pending_messages.keys()):
-            if now - pending_messages[uid]["time"] > 120:  # 2 minutes
-                try:
-                    del pending_messages[uid]
-                    print(f"🕒 Cleared pending message for {uid} (expired)")
-                except KeyError:
-                    pass
-        time.sleep(30)
+# === TIMEOUT CHECK ===
+async def clear_pending_after_timeout(user_id: int, delay: int = 120):
+    await asyncio.sleep(delay)
+    if user_id in pending_messages:
+        del pending_messages[user_id]
+        print(f"⏳ Cleared pending message for user {user_id} after timeout")
 
-# === TELEGRAM HANDLERS ===
+# === TELEGRAM BOT HANDLERS ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in ALLOWED_USERS:
+    user_id = update.message.from_user.id
+    if user_id not in ALLOWED_USERS:
         return await update.message.reply_text("🚫 You are not authorized to use this bot.")
-    await update.message.reply_text("👋 Send text, photo, or video — I’ll translate and confirm before posting.")
+    await update.message.reply_text("👋 Hi! Send me text, photo, or video — I’ll translate and ask before posting.")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
+    user_id = update.message.from_user.id
     if user_id not in ALLOWED_USERS:
         return await update.message.reply_text("🚫 You are not authorized to use this bot.")
 
@@ -75,71 +69,74 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     photo = update.message.photo
     video = update.message.video
 
-    # === If user already has a pending message ===
+    # === CONFIRMATION HANDLING ===
     if user_id in pending_messages:
         response = (update.message.text or "").strip().lower()
+        data = pending_messages[user_id]
 
         if response in ["yes", "y", "ok", "send"]:
-            data = pending_messages[user_id]
             for cid in CHANNEL_IDS:
                 try:
                     if data["type"] == "text":
-                        await context.bot.send_message(chat_id=cid, text=data["text"], parse_mode="MarkdownV2")
+                        await context.bot.send_message(chat_id=cid, text=data["text"], parse_mode="Markdown")
                     elif data["type"] == "photo":
-                        await context.bot.send_photo(chat_id=cid, photo=data["file_id"], caption=data["text"], parse_mode="MarkdownV2")
+                        await context.bot.send_photo(chat_id=cid, photo=data["file_id"], caption=data["text"], parse_mode="Markdown")
                     elif data["type"] == "video":
-                        await context.bot.send_video(chat_id=cid, video=data["file_id"], caption=data["text"], parse_mode="MarkdownV2")
+                        await context.bot.send_video(chat_id=cid, video=data["file_id"], caption=data["text"], parse_mode="Markdown")
                 except TelegramError as e:
-                    print(f"⚠️ Send failed: {e}")
+                    print(f"⚠️ Error sending message: {e}")
 
             await update.message.reply_text("✅ Sent to all channels!")
             del pending_messages[user_id]
-            return
-
         elif response in ["no", "n", "cancel"]:
             await update.message.reply_text("❌ Cancelled.")
             del pending_messages[user_id]
-            return
-
         else:
-            # Treat any other text as updated message content
-            pending_messages[user_id]["text"] = update.message.text
-            pending_messages[user_id]["time"] = time.time()
-            await update.message.reply_text(f"✏️ Updated text:\n\n{update.message.text}\n\nReply 'Yes' to send.")
-            return
+            await update.message.reply_text("Please reply with 'Yes' or 'No'.")
+        return
 
-    # === New message ===
+    # === NEW MESSAGE HANDLING ===
     translated_text = translator.translate(text) if text else ""
 
     if photo:
         file_id = photo[-1].file_id
-        pending_messages[user_id] = {"type": "photo", "file_id": file_id, "text": translated_text, "time": time.time()}
+        pending_messages[user_id] = {"type": "photo", "file_id": file_id, "text": translated_text}
         await update.message.reply_photo(photo=file_id, caption=f"{translated_text}\n\nSend to channel? (Yes / No)")
     elif video:
         file_id = video.file_id
-        pending_messages[user_id] = {"type": "video", "file_id": file_id, "text": translated_text, "time": time.time()}
+        pending_messages[user_id] = {"type": "video", "file_id": file_id, "text": translated_text}
         await update.message.reply_video(video=file_id, caption=f"{translated_text}\n\nSend to channel? (Yes / No)")
     elif text:
-        pending_messages[user_id] = {"type": "text", "text": translated_text, "time": time.time()}
+        pending_messages[user_id] = {"type": "text", "text": translated_text}
         await update.message.reply_text(f"{translated_text}\n\nSend to channel? (Yes / No)")
     else:
         await update.message.reply_text("⚠️ Please send text, image, or video.")
 
-# === Detect edited message ===
-async def handle_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.edited_message.from_user.id
-    if user_id in pending_messages:
-        new_text = update.edited_message.text
-        pending_messages[user_id]["text"] = new_text
-        pending_messages[user_id]["time"] = time.time()
-        await update.edited_message.reply_text("✏️ Edited message updated! Reply 'Yes' to send this version.")
+    # Start timeout cleanup
+    asyncio.create_task(clear_pending_after_timeout(user_id))
 
-# === RUN BOT ===
+# === HANDLE EDITED MESSAGES ===
+async def handle_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.edited_message:
+        return
+
+    user_id = update.edited_message.from_user.id
+    if user_id not in ALLOWED_USERS:
+        return
+
+    new_text = update.edited_message.text or update.edited_message.caption
+    if user_id in pending_messages:
+        pending_messages[user_id]["text"] = new_text
+        await update.edited_message.reply_text(
+            "✏️ Message updated.\n\nSend to channel? (Yes / No)"
+        )
+
+# === BOT RUNNER ===
 async def run_bot():
     app_tg = ApplicationBuilder().token(BOT_TOKEN).build()
     app_tg.add_handler(CommandHandler("start", start))
+    app_tg.add_handler(MessageHandler(filters.UpdateType.EDITED_MESSAGE, handle_edit))
     app_tg.add_handler(MessageHandler(filters.TEXT | filters.PHOTO | filters.VIDEO, handle_message))
-    app_tg.add_handler(EditedMessageHandler(filters.TEXT, handle_edit))
 
     print("🚀 Telegram bot is running...")
     await app_tg.initialize()
@@ -151,5 +148,4 @@ async def run_bot():
 if __name__ == "__main__":
     threading.Thread(target=run_web).start()
     threading.Thread(target=ping_self, daemon=True).start()
-    threading.Thread(target=cleanup_loop, daemon=True).start()
     asyncio.run(run_bot())
