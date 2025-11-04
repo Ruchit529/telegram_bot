@@ -79,7 +79,8 @@ async def run_bot():
     app_tg = ApplicationBuilder().token(BOT_TOKEN).build()
     app_tg.add_handler(CommandHandler("start", start))
     app_tg.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app_tg.add_handler(MessageHandler(filters.Regex("^(?i)(yes|no)$"), confirm_send))
+    app_tg.add_handler(MessageHandler(filters.TEXT & filters.Regex("(?i)^(yes|no)$"), confirm_send))
+
 
     print("🚀 Telegram bot is running...")
     keep_alive()
