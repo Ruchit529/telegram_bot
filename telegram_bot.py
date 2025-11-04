@@ -68,9 +68,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    cleanup_pending()  # 🧹 Auto-remove old pending confirmations
-
+    cleanup_pending()  # 🧹 Remove old confirmations
     user_id = update.message.from_user.id
+
     if user_id not in ALLOWED_USERS:
         return await update.message.reply_text("🚫 You are not authorized to use this bot.")
 
@@ -78,12 +78,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     photo = update.message.photo
     video = update.message.video
 
-    # === CONFIRMATION HANDLING ===
+    # === EDIT OR CONFIRM HANDLING ===
     if user_id in pending_messages:
-        response = (update.message.text or "").strip().lower()
-        data = pending_messages[user_id]
+        response = (update.message.text or "").strip()
 
-        if response in ["yes", "y", "ok", "send"]:
+        # --- Confirm ---
+        if response.lower() in ["yes", "y", "ok", "send"]:
+            data = pending_messages[user_id]
             for cid in CHANNEL_IDS:
                 try:
                     if data["type"] == "text":
@@ -97,12 +98,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             await update.message.reply_text("✅ Sent to all channels!")
             del pending_messages[user_id]
-        elif response in ["no", "n", "cancel"]:
+            return
+
+        # --- Cancel ---
+        elif response.lower() in ["no", "n", "cancel"]:
             await update.message.reply_text("❌ Cancelled.")
             del pending_messages[user_id]
+            return
+
+        # --- Edit (any other text) ---
         else:
-            await update.message.reply_text("Please reply with 'Yes' or 'No'.")
-        return
+            pending_messages[user_id]["text"] = response
+            await update.message.reply_text(f"✏️ Updated text:\n\n{response}\n\nNow reply 'Yes' to send.")
+            return
 
     # === NEW MESSAGE HANDLING ===
     translated_text = translator.translate(text) if text else ""
@@ -120,7 +128,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"{translated_text}\n\nSend to channel? (Yes / No)")
     else:
         await update.message.reply_text("⚠️ Please send text, image, or video.")
-
 
 # === BOT RUNNER ===
 async def run_bot():
