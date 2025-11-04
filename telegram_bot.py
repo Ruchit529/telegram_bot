@@ -123,17 +123,14 @@ async def handle_edited(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pending_messages[user_id]["text"] = new_text
         await update.edited_message.reply_text("✏️ Message updated.\n\nSend to channel? (Yes / No)")
 
-# === BOT RUNNER ===
+# === BOT RUNNER ==#
 async def run_bot():
     app_tg = ApplicationBuilder().token(BOT_TOKEN).build()
     app_tg.add_handler(CommandHandler("start", start))
     app_tg.add_handler(MessageHandler(filters.TEXT | filters.PHOTO | filters.VIDEO, handle_message))
-    app_tg.add_handler(MessageHandler(filters.UpdateType.EDITED_MESSAGE, handle_edited))
 
     print("🚀 Telegram bot is running...")
-    await app_tg.start()
-    await app_tg.updater.start_polling()
-    await asyncio.Event().wait()
+    await app_tg.run_polling()
 
 # === MAIN ===
 def main():
