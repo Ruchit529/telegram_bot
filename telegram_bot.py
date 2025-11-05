@@ -18,16 +18,14 @@ from telegram.error import TelegramError
 # === CONFIGURATION ===
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_IDS = ["-1003052492544", "-1003238213356"]  # Your channel IDs
-ALLOWED_USERS = [7173549132]  # Replace with your Telegram ID
-SELF_URL = os.getenv("SELF_URL", "https://telegram_bot_w8pe.onrender.com")  # Replace with your Render URL
-
-# 🔗 Replace with your actual group link (e.g., https://t.me/mygroup)
-JOIN_LINK = "https://t.me/steam_games_chatt"
+ALLOWED_USERS = [7173549132]
+SELF_URL = os.getenv("SELF_URL", "https://telegram_bot_w8pe.onrender.com")
+GROUP_LINK = "https://t.me/your_group_link_here"  # 🔗 Replace with your actual group link
 
 translator = GoogleTranslator(source="auto", target="en")
 
 pending_messages = {}
-MESSAGE_TIMEOUT = 120  # Auto-clear old confirmations after 2 minutes
+MESSAGE_TIMEOUT = 120  # 2 minutes auto-clear
 
 
 # === FLASK SERVER ===
@@ -57,26 +55,22 @@ def ping_self():
 # === CLEANUP ===
 def cleanup_pending():
     now = time.time()
-    for uid in list(pending_messages.keys()):
-        if now - pending_messages[uid]["time"] > MESSAGE_TIMEOUT:
-            del pending_messages[uid]
+    to_delete = [uid for uid, data in pending_messages.items() if now - data["time"] > MESSAGE_TIMEOUT]
+    for uid in to_delete:
+        del pending_messages[uid]
 
 
 # === MESSAGE TEMPLATE ===
-def apply_template(text: str) -> str:
-    """
-    Add the 👇👇👇 and JOIN GROUP clickable link template.
-    """
-    template = f"👇👇👇\n\n{text}\n\n👉 [JOIN GROUP]({JOIN_LINK})"
-    return template
+def build_template(message_text: str) -> str:
+    return f"👇👇👇\n\n{message_text}\n\n👉 [JOIN GROUP]({GROUP_LINK})"
 
 
-# === BOT HANDLERS ===
+# === TELEGRAM BOT LOGIC ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     if user_id not in ALLOWED_USERS:
         return await update.message.reply_text("🚫 You are not authorized to use this bot.")
-    await update.message.reply_text("👋 Send text, photo, or video — I’ll translate, format, and confirm before posting.")
+    await update.message.reply_text("👋 Hi! Send me text, photo, or video — I’ll translate and ask before posting.")
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -84,118 +78,84 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
 
     if user_id not in ALLOWED_USERS:
-        return await update.message.reply_text("🚫 You are not authorized.")
+        return await update.message.reply_text("🚫 You are not authorized to use this bot.")
 
     text = update.message.caption or update.message.text
     photo = update.message.photo
     video = update.message.video
 
-    # === CONFIRM / EDIT ===
+    # === CONFIRMATION HANDLING ===
     if user_id in pending_messages:
-        response = (update.message.text or "").strip().lower()
+        response = (update.message.text or "").strip()
 
-        # --- YES / SEND ---
-        if response in ["yes", "y", "ok", "send"]:
+        if response.lower() in ["yes", "y", "ok", "send"]:
             data = pending_messages[user_id]
             for cid in CHANNEL_IDS:
                 try:
                     if data["type"] == "text":
                         await context.bot.send_message(
                             chat_id=cid,
-                            text=data["text"],
+                            text=build_template(data["text"]),
                             parse_mode="Markdown",
-                            disable_web_page_preview=True
+                            disable_web_page_preview=True,
                         )
                     elif data["type"] == "photo":
                         await context.bot.send_photo(
                             chat_id=cid,
                             photo=data["file_id"],
-                            caption=data["text"],
-                            parse_mode="Markdown"
+                            caption=build_template(data["text"]),
+                            parse_mode="Markdown",
                         )
                     elif data["type"] == "video":
                         await context.bot.send_video(
                             chat_id=cid,
                             video=data["file_id"],
-                            caption=data["text"],
-                            parse_mode="Markdown"
+                            caption=build_template(data["text"]),
+                            parse_mode="Markdown",
                         )
-                except TelegramError as e:
-                    print(f"⚠️ Telegram send error: {e}")
+                except TelegramError:
+                    pass
 
             await update.message.reply_text("✅ Sent to all channels!")
             del pending_messages[user_id]
             return
 
-        # --- CANCEL ---
-        elif response in ["no", "n", "cancel"]:
+        elif response.lower() in ["no", "n", "cancel"]:
             await update.message.reply_text("❌ Cancelled.")
             del pending_messages[user_id]
             return
 
-        # --- EDIT TEXT ---
         else:
-            formatted_text = apply_template(response)
-            pending_messages[user_id]["text"] = formatted_text
-            await update.message.reply_text(
-                f"✏️ Updated text:\n\n{formatted_text}\n\nNow reply *Yes* to send.",
-                parse_mode="Markdown"
-            )
+            # --- Edit the message text ---
+            pending_messages[user_id]["text"] = response
+            await update.message.reply_text(f"✏️ Updated text:\n\n{build_template(response)}\n\nNow reply 'Yes' to send.")
             return
 
-    # === NEW MESSAGE ===
-    translated_text = translator.translate(text) if text else text
-    formatted_text = apply_template(translated_text)
+    # === NEW MESSAGE HANDLING ===
+    translated_text = translator.translate(text) if text else ""
 
     if photo:
         file_id = photo[-1].file_id
-        pending_messages[user_id] = {
-            "type": "photo",
-            "file_id": file_id,
-            "text": formatted_text,
-            "time": time.time()
-        }
-        await update.message.reply_photo(
-            photo=file_id,
-            caption=f"{formatted_text}\n\nSend to channel? (Yes / No)",
-            parse_mode="Markdown"
-        )
-
+        pending_messages[user_id] = {"type": "photo", "file_id": file_id, "text": translated_text, "time": time.time()}
+        await update.message.reply_photo(photo=file_id, caption=f"{build_template(translated_text)}\n\nSend to channel? (Yes / No)", parse_mode="Markdown")
     elif video:
         file_id = video.file_id
-        pending_messages[user_id] = {
-            "type": "video",
-            "file_id": file_id,
-            "text": formatted_text,
-            "time": time.time()
-        }
-        await update.message.reply_video(
-            video=file_id,
-            caption=f"{formatted_text}\n\nSend to channel? (Yes / No)",
-            parse_mode="Markdown"
-        )
-
+        pending_messages[user_id] = {"type": "video", "file_id": file_id, "text": translated_text, "time": time.time()}
+        await update.message.reply_video(video=file_id, caption=f"{build_template(translated_text)}\n\nSend to channel? (Yes / No)", parse_mode="Markdown")
     elif text:
-        pending_messages[user_id] = {
-            "type": "text",
-            "text": formatted_text,
-            "time": time.time()
-        }
-        await update.message.reply_text(
-            f"{formatted_text}\n\nSend to channel? (Yes / No)",
-            parse_mode="Markdown"
-        )
+        pending_messages[user_id] = {"type": "text", "text": translated_text, "time": time.time()}
+        await update.message.reply_text(f"{build_template(translated_text)}\n\nSend to channel? (Yes / No)", parse_mode="Markdown")
     else:
         await update.message.reply_text("⚠️ Please send text, image, or video.")
 
 
-# === RUN BOT ===
+# === BOT RUNNER ===
 async def run_bot():
     app_tg = ApplicationBuilder().token(BOT_TOKEN).build()
     app_tg.add_handler(CommandHandler("start", start))
-    app_tg.add_handler(MessageHandler(filters.ALL, handle_message))
+    app_tg.add_handler(MessageHandler(filters.TEXT | filters.PHOTO | filters.VIDEO, handle_message))
 
-    print("🚀 Bot is running...")
+    print("🚀 Telegram bot is running...")
     await app_tg.initialize()
     await app_tg.start()
     await app_tg.updater.start_polling()
