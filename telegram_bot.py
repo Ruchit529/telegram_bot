@@ -194,11 +194,15 @@ async def run_bot():
     app_tg.add_handler(CommandHandler("start", start))
     app_tg.add_handler(MessageHandler(filters.TEXT | filters.PHOTO | filters.VIDEO, handle_message))
     print("🚀 Telegram bot is running...")
-    await app_tg.run_polling(close_loop=False)
-
+    # Just initialize — no event loop nesting
+    await app_tg.run_polling()
 
 # === MAIN ===
 if __name__ == "__main__":
+    # Start web and ping threads
     threading.Thread(target=run_web, daemon=True).start()
     threading.Thread(target=ping_self, daemon=True).start()
-    asyncio.run(run_bot())
+
+    # Run the bot safely in the current event loop
+    asyncio.get_event_loop().run_until_complete(run_bot())
+
