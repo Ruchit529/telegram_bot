@@ -12,16 +12,16 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
-from telegram.error import TelegramError
-from telegram.helpers import escape_markdown
 from deep_translator import GoogleTranslator
+from telegram.error import TelegramError
+
 
 # === CONFIGURATION ===
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_IDS = ["-1003052492544", "-1003238213356"]  # Your channel IDs
 ALLOWED_USERS = [7173549132]
 SELF_URL = os.getenv("SELF_URL", "https://telegram_bot_w8pe.onrender.com")
-GROUP_LINK = "https://t.me/your_group_link_here"  # 🔗 Replace with your actual group link
+GROUP_LINK = "https://t.me/steam_games_chatt"  # 🔗 Replace with your actual group link
 
 translator = GoogleTranslator(source="auto", target="en")
 
@@ -35,6 +35,7 @@ app_web = Flask(__name__)
 @app_web.route('/')
 def home():
     return "✅ Telegram bot is running on Render!", 200
+
 
 def run_web():
     port = int(os.getenv("PORT", 10000))
@@ -56,14 +57,16 @@ def ping_self():
 # === CLEANUP ===
 def cleanup_pending():
     now = time.time()
-    to_delete = [uid for uid, data in pending_messages.items() if now - data["time"] > MESSAGE_TIMEOUT]
+    to_delete = [
+        uid for uid, data in pending_messages.items()
+        if now - data["time"] > MESSAGE_TIMEOUT
+    ]
     for uid in to_delete:
         del pending_messages[uid]
 
 
 # === MESSAGE TEMPLATE ===
 def build_template(message_text: str) -> str:
-    # message_text is already escaped
     return f"👇👇👇\n\n{message_text}\n\n👉 [JOIN GROUP]({GROUP_LINK})"
 
 
@@ -98,7 +101,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await context.bot.send_message(
                             chat_id=cid,
                             text=build_template(data["text"]),
-                            parse_mode="MarkdownV2",
+                            parse_mode="Markdown",
                             disable_web_page_preview=True,
                         )
                     elif data["type"] == "photo":
@@ -106,14 +109,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             chat_id=cid,
                             photo=data["file_id"],
                             caption=build_template(data["text"]),
-                            parse_mode="MarkdownV2",
+                            parse_mode="Markdown",
                         )
                     elif data["type"] == "video":
                         await context.bot.send_video(
                             chat_id=cid,
                             video=data["file_id"],
                             caption=build_template(data["text"]),
-                            parse_mode="MarkdownV2",
+                            parse_mode="Markdown",
                         )
                 except TelegramError:
                     pass
@@ -129,44 +132,52 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         else:
             # --- Edit the message text ---
-            safe_text = escape_markdown(response, version=2)
-            pending_messages[user_id]["text"] = safe_text
+            pending_messages[user_id]["text"] = response
             await update.message.reply_text(
-                f"✏️ Updated text:\n\n{build_template(safe_text)}\n\nNow reply 'Yes' to send.",
-                parse_mode="MarkdownV2"
+                f"✏️ Updated text:\n\n{build_template(response)}\n\nNow reply 'Yes' to send."
             )
             return
 
     # === NEW MESSAGE HANDLING ===
-    if text:
-        raw_text = translator.translate(text)
-        translated_text = escape_markdown(raw_text, version=2)
-    else:
-        translated_text = ""
+    translated_text = translator.translate(text) if text else ""
 
     if photo:
         file_id = photo[-1].file_id
-        pending_messages[user_id] = {"type": "photo", "file_id": file_id, "text": translated_text, "time": time.time()}
+        pending_messages[user_id] = {
+            "type": "photo",
+            "file_id": file_id,
+            "text": translated_text,
+            "time": time.time(),
+        }
         await update.message.reply_photo(
             photo=file_id,
             caption=f"{build_template(translated_text)}\n\nSend to channel? (Yes / No)",
-            parse_mode="MarkdownV2"
+            parse_mode="Markdown",
         )
 
     elif video:
         file_id = video.file_id
-        pending_messages[user_id] = {"type": "video", "file_id": file_id, "text": translated_text, "time": time.time()}
+        pending_messages[user_id] = {
+            "type": "video",
+            "file_id": file_id,
+            "text": translated_text,
+            "time": time.time(),
+        }
         await update.message.reply_video(
             video=file_id,
             caption=f"{build_template(translated_text)}\n\nSend to channel? (Yes / No)",
-            parse_mode="MarkdownV2"
+            parse_mode="Markdown",
         )
 
     elif text:
-        pending_messages[user_id] = {"type": "text", "text": translated_text, "time": time.time()}
+        pending_messages[user_id] = {
+            "type": "text",
+            "text": translated_text,
+            "time": time.time(),
+        }
         await update.message.reply_text(
             f"{build_template(translated_text)}\n\nSend to channel? (Yes / No)",
-            parse_mode="MarkdownV2"
+            parse_mode="Markdown",
         )
 
     else:
