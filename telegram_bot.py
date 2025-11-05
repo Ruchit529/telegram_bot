@@ -12,8 +12,9 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
-from deep_translator import GoogleTranslator
 from telegram.error import TelegramError
+from telegram.helpers import escape_markdown
+from deep_translator import GoogleTranslator
 
 # === CONFIGURATION ===
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -62,6 +63,7 @@ def cleanup_pending():
 
 # === MESSAGE TEMPLATE ===
 def build_template(message_text: str) -> str:
+    # message_text is already escaped
     return f"👇👇👇\n\n{message_text}\n\n👉 [JOIN GROUP]({GROUP_LINK})"
 
 
@@ -96,7 +98,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await context.bot.send_message(
                             chat_id=cid,
                             text=build_template(data["text"]),
-                            parse_mode="Markdown",
+                            parse_mode="MarkdownV2",
                             disable_web_page_preview=True,
                         )
                     elif data["type"] == "photo":
@@ -104,14 +106,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             chat_id=cid,
                             photo=data["file_id"],
                             caption=build_template(data["text"]),
-                            parse_mode="Markdown",
+                            parse_mode="MarkdownV2",
                         )
                     elif data["type"] == "video":
                         await context.bot.send_video(
                             chat_id=cid,
                             video=data["file_id"],
                             caption=build_template(data["text"]),
-                            parse_mode="Markdown",
+                            parse_mode="MarkdownV2",
                         )
                 except TelegramError:
                     pass
@@ -127,24 +129,46 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         else:
             # --- Edit the message text ---
-            pending_messages[user_id]["text"] = response
-            await update.message.reply_text(f"✏️ Updated text:\n\n{build_template(response)}\n\nNow reply 'Yes' to send.")
+            safe_text = escape_markdown(response, version=2)
+            pending_messages[user_id]["text"] = safe_text
+            await update.message.reply_text(
+                f"✏️ Updated text:\n\n{build_template(safe_text)}\n\nNow reply 'Yes' to send.",
+                parse_mode="MarkdownV2"
+            )
             return
 
     # === NEW MESSAGE HANDLING ===
-    translated_text = translator.translate(text) if text else ""
+    if text:
+        raw_text = translator.translate(text)
+        translated_text = escape_markdown(raw_text, version=2)
+    else:
+        translated_text = ""
 
     if photo:
         file_id = photo[-1].file_id
         pending_messages[user_id] = {"type": "photo", "file_id": file_id, "text": translated_text, "time": time.time()}
-        await update.message.reply_photo(photo=file_id, caption=f"{build_template(translated_text)}\n\nSend to channel? (Yes / No)", parse_mode="Markdown")
+        await update.message.reply_photo(
+            photo=file_id,
+            caption=f"{build_template(translated_text)}\n\nSend to channel? (Yes / No)",
+            parse_mode="MarkdownV2"
+        )
+
     elif video:
         file_id = video.file_id
         pending_messages[user_id] = {"type": "video", "file_id": file_id, "text": translated_text, "time": time.time()}
-        await update.message.reply_video(video=file_id, caption=f"{build_template(translated_text)}\n\nSend to channel? (Yes / No)", parse_mode="Markdown")
+        await update.message.reply_video(
+            video=file_id,
+            caption=f"{build_template(translated_text)}\n\nSend to channel? (Yes / No)",
+            parse_mode="MarkdownV2"
+        )
+
     elif text:
         pending_messages[user_id] = {"type": "text", "text": translated_text, "time": time.time()}
-        await update.message.reply_text(f"{build_template(translated_text)}\n\nSend to channel? (Yes / No)", parse_mode="Markdown")
+        await update.message.reply_text(
+            f"{build_template(translated_text)}\n\nSend to channel? (Yes / No)",
+            parse_mode="MarkdownV2"
+        )
+
     else:
         await update.message.reply_text("⚠️ Please send text, image, or video.")
 
