@@ -25,10 +25,11 @@ GROUP_LINK = "https://t.me/steam_games_chatt"
 
 translator = GoogleTranslator(source="auto", target="en")
 pending_messages = {}
-MESSAGE_TIMEOUT = 120  # seconds
+MESSAGE_TIMEOUT = 120
 
-# === FLASK ===
+# === FLASK SERVER ===
 app_web = Flask(__name__)
+
 @app_web.route('/')
 def home():
     return "✅ Telegram bot is running!", 200
@@ -37,202 +38,144 @@ def run_web():
     port = int(os.getenv("PORT", 10000))
     app_web.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 
+# === KEEP ALIVE ===
 def ping_self():
     while True:
         try:
             requests.get(SELF_URL, timeout=5)
-        except Exception:
-            pass
+            print(f"🔁 Pinged {SELF_URL}")
+        except Exception as e:
+            print(f"⚠️ Ping failed: {e}")
         time.sleep(300)
 
+# === CLEANUP ===
 def cleanup_pending():
     now = time.time()
     for uid in list(pending_messages.keys()):
         if now - pending_messages[uid]["time"] > MESSAGE_TIMEOUT:
             del pending_messages[uid]
 
-# --- Helpers to build template and shift entities ---
+# === TEMPLATE BUILDER ===
 TEMPLATE_PREFIX = "👇👇👇\n\n"
 TEMPLATE_SUFFIX = f"\n\n👉 JOIN GROUP"
 
 def build_text_and_entities(orig_text: str, orig_entities):
-    """
-    Returns (full_text, entities_list) where entities_list refers to positions in full_text.
-    If orig_entities is None/empty, returns (full_text, None) so we can use parse_mode as fallback.
-    We always append the JOIN_GROUP as a text_link entity.
-    """
     if orig_text is None:
         orig_text = ""
     full_text = TEMPLATE_PREFIX + orig_text + TEMPLATE_SUFFIX
-    # If there are no original entities, return None for entities (we'll use Markdown fallback)
-    if not orig_entities:
-        # create a text_link entity for JOIN GROUP
-        link_offset = len(full_text) - len("JOIN GROUP")
-        link_length = len("JOIN GROUP")
-        join_ent = MessageEntity(type="text_link", offset=link_offset, length=link_length, url=GROUP_LINK)
-        return full_text, [join_ent]
 
-    # shift original entities by prefix length
+    # handle entities shifting
+    if not orig_entities:
+        link_offset = len(full_text) - len("JOIN GROUP")
+        link_entity = MessageEntity("text_link", offset=link_offset, length=len("JOIN GROUP"), url=GROUP_LINK)
+        return full_text, [link_entity]
+
     shifted = []
     for e in orig_entities:
-        # create a new entity preserving type, url (if text_link), user (if text_mention), language (if pre), etc.
         new_off = e.offset + len(TEMPLATE_PREFIX)
-        new_len = e.length
-        # build new MessageEntity; include url/user if present
         if e.type == "text_link":
-            new_ent = MessageEntity(type="text_link", offset=new_off, length=new_len, url=e.url)
+            shifted.append(MessageEntity("text_link", new_off, e.length, url=e.url))
         elif e.type == "text_mention":
-            new_ent = MessageEntity(type="text_mention", offset=new_off, length=new_len, user=e.user)
+            shifted.append(MessageEntity("text_mention", new_off, e.length, user=e.user))
         else:
-            # other entity types
-            new_ent = MessageEntity(type=e.type, offset=new_off, length=new_len, language=getattr(e, "language", None))
-        shifted.append(new_ent)
-    # add join link entity
+            shifted.append(MessageEntity(e.type, new_off, e.length))
     link_offset = len(full_text) - len("JOIN GROUP")
-    link_length = len("JOIN GROUP")
-    join_ent = MessageEntity(type="text_link", offset=link_offset, length=link_length, url=GROUP_LINK)
-    shifted.append(join_ent)
+    shifted.append(MessageEntity("text_link", link_offset, len("JOIN GROUP"), url=GROUP_LINK))
     return full_text, shifted
 
-# safe plain text send splitting (no entities)
+# === SAFE SEND ===
 async def safe_send_plain(bot, chat_id, text):
     for i in range(0, len(text), 4000):
-        await bot.send_message(chat_id=chat_id, text=text[i:i+4000], parse_mode="Markdown", disable_web_page_preview=True)
+        await bot.send_message(chat_id=chat_id, text=text[i:i+4000], disable_web_page_preview=True)
 
+# === TELEGRAM LOGIC ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.message.from_user.id
-    if uid not in ALLOWED_USERS:
-        await update.message.reply_text("🚫 You are not authorized.")
-        return
-    await update.message.reply_text("👋 Send text/photo/video — edit text if needed, then reply 'Yes' to send.")
+    if update.effective_user.id not in ALLOWED_USERS:
+        return await update.message.reply_text("🚫 Unauthorized user.")
+    await update.message.reply_text("👋 Send text/photo/video — then 'Yes' to send or edit before.")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cleanup_pending()
     msg = update.message
     uid = msg.from_user.id
     if uid not in ALLOWED_USERS:
-        await msg.reply_text("🚫 You are not authorized.")
-        return
+        return await msg.reply_text("🚫 Unauthorized user.")
 
-    # original content and entities (handle caption/entities for media)
-    orig_text = msg.caption if msg.caption is not None else msg.text
-    orig_entities = msg.caption_entities if msg.caption is not None else msg.entities
-
+    text = msg.caption or msg.text
+    entities = msg.caption_entities or msg.entities
     photo = msg.photo
     video = msg.video
 
-    # If user already has a pending message: interpret the incoming text as confirm / cancel / edit
+    # === Confirmation/Edit ===
     if uid in pending_messages:
-        reply = (msg.text or "").strip()
-        if reply.lower() in ["yes", "y", "ok", "send"]:
+        reply = (msg.text or "").strip().lower()
+        if reply in ["yes", "y", "ok", "send"]:
             data = pending_messages[uid]
-            # data["text"] is the stored original (not wrapped yet)
-            send_text = data["text"]
-            send_entities = data.get("entities")
-            # Build full template and shifted entities
-            full_text, ents = build_text_and_entities(send_text, send_entities)
+            full_text, ents = build_text_and_entities(data["text"], data.get("entities"))
             for cid in CHANNEL_IDS:
                 try:
                     if data["type"] == "text":
-                        # if we have proper entities and length < limit, send using entities
-                        if ents and len(full_text) <= 4096:
-                            await context.bot.send_message(chat_id=cid, text=full_text, entities=ents, disable_web_page_preview=True)
+                        if ents:
+                            await context.bot.send_message(chat_id=cid, text=full_text, entities=ents)
                         else:
-                            # fallback to plain (escaped) markdown split
                             await safe_send_plain(context.bot, cid, full_text)
                     elif data["type"] == "photo":
-                        if ents and len(full_text) <= 1024:
-                            # caption limit 1024 for media
-                            await context.bot.send_photo(chat_id=cid, photo=data["file_id"], caption=full_text, caption_entities=ents)
-                        else:
-                            # send caption as plain text then photo (or photo with no entities)
-                            await context.bot.send_photo(chat_id=cid, photo=data["file_id"], caption=full_text if len(full_text) <= 1024 else "")
-                            if len(full_text) > 1024:
-                                await safe_send_plain(context.bot, cid, full_text)
+                        await context.bot.send_photo(chat_id=cid, photo=data["file_id"], caption=full_text, caption_entities=ents)
                     elif data["type"] == "video":
-                        if ents and len(full_text) <= 1024:
-                            await context.bot.send_video(chat_id=cid, video=data["file_id"], caption=full_text, caption_entities=ents)
-                        else:
-                            await context.bot.send_video(chat_id=cid, video=data["file_id"], caption=full_text if len(full_text) <= 1024 else "")
-                            if len(full_text) > 1024:
-                                await safe_send_plain(context.bot, cid, full_text)
+                        await context.bot.send_video(chat_id=cid, video=data["file_id"], caption=full_text, caption_entities=ents)
                 except TelegramError as e:
-                    print("Send error:", e)
+                    print(f"⚠️ Send failed: {e}")
             await msg.reply_text("✅ Sent to all channels!")
             del pending_messages[uid]
             return
 
-        if reply.lower() in ["no", "n", "cancel"]:
+        elif reply in ["no", "n", "cancel"]:
             await msg.reply_text("❌ Cancelled.")
             del pending_messages[uid]
             return
 
-        # treat any other text as edit of the stored message
-        new_text = msg.text or ""
-        # capture formatting entities from this edit message (they apply to msg.entities)
-        new_entities = msg.entities
-        pending_messages[uid]["text"] = new_text
-        pending_messages[uid]["entities"] = new_entities
-        # prepare preview using entities if available
-        full_text, ents = build_text_and_entities(new_text, new_entities)
-        # send preview - use entities if present
-        try:
-            if ents and len(full_text) <= 4096:
-                await msg.reply_text(full_text, entities=ents, disable_web_page_preview=True)
-            else:
-                await msg.reply_text(full_text, parse_mode="Markdown", disable_web_page_preview=True)
-        except Exception:
-            # fallback plain
-            await msg.reply_text(full_text, disable_web_page_preview=True)
-        await msg.reply_text("✏️ Updated preview. Reply 'Yes' to send.")
+        # treat as edit
+        pending_messages[uid]["text"] = msg.text
+        pending_messages[uid]["entities"] = msg.entities
+        preview, ents = build_text_and_entities(msg.text, msg.entities)
+        await msg.reply_text(preview, entities=ents)
+        await msg.reply_text("✏️ Preview updated. Reply 'Yes' to send.")
         return
 
-    # No pending: this is a new message -> translate and create pending
-    translated = translator.translate(orig_text) if orig_text else ""
-    # store raw translated text and entities from the user's own message so formatting preserved
-    pending_data = {"type": "text", "text": translated, "entities": orig_entities, "time": time.time()}
+    # === New message ===
+    translated = translator.translate(text) if text else ""
+    data = {"type": "text", "text": translated, "entities": entities, "time": time.time()}
     if photo:
-        file_id = photo[-1].file_id
-        pending_data.update({"type": "photo", "file_id": file_id})
-    if video:
-        file_id = video.file_id
-        pending_data.update({"type": "video", "file_id": file_id})
+        data["type"] = "photo"
+        data["file_id"] = photo[-1].file_id
+    elif video:
+        data["type"] = "video"
+        data["file_id"] = video.file_id
+    pending_messages[uid] = data
 
-    pending_messages[uid] = pending_data
-
-    # Build preview and send it back to user
-    full_text, ents = build_text_and_entities(translated, orig_entities)
-    try:
-        if pending_data["type"] == "text":
-            if ents and len(full_text) <= 4096:
-                await msg.reply_text(full_text, entities=ents, disable_web_page_preview=True)
-            else:
-                await msg.reply_text(full_text, parse_mode="Markdown", disable_web_page_preview=True)
-        elif pending_data["type"] == "photo":
-            if ents and len(full_text) <= 1024:
-                await msg.reply_photo(photo=pending_data["file_id"], caption=full_text, caption_entities=ents)
-            else:
-                await msg.reply_photo(photo=pending_data["file_id"], caption=full_text, parse_mode="Markdown")
-        elif pending_data["type"] == "video":
-            if ents and len(full_text) <= 1024:
-                await msg.reply_video(video=pending_data["file_id"], caption=full_text, caption_entities=ents)
-            else:
-                await msg.reply_video(video=pending_data["file_id"], caption=full_text, parse_mode="Markdown")
-    except Exception:
-        # last-resort fallback
-        await msg.reply_text(full_text, disable_web_page_preview=True)
-
+    preview, ents = build_text_and_entities(translated, entities)
+    if data["type"] == "photo":
+        await msg.reply_photo(photo=data["file_id"], caption=preview, caption_entities=ents)
+    elif data["type"] == "video":
+        await msg.reply_video(video=data["file_id"], caption=preview, caption_entities=ents)
+    else:
+        await msg.reply_text(preview, entities=ents)
     await msg.reply_text("Send to channel? (Yes / No)")
 
+# === BOT RUNNER ===
 async def run_bot():
     app_tg = ApplicationBuilder().token(BOT_TOKEN).build()
     app_tg.add_handler(CommandHandler("start", start))
-    # handle edited messages as normal messages: the library will populate update.edited_message into update.message
     app_tg.add_handler(MessageHandler(filters.ALL, handle_message))
-    print("Bot running...")
+    print("🚀 Telegram bot is running...")
     await app_tg.run_polling(close_loop=False)
 
+# === MAIN FIXED (Render Safe) ===
 if __name__ == "__main__":
     threading.Thread(target=run_web, daemon=True).start()
     threading.Thread(target=ping_self, daemon=True).start()
-    asyncio.run(run_bot())
+
+    # 🔧 Run bot inside the existing event loop (Render-safe)
+    loop = asyncio.get_event_loop()
+    loop.create_task(run_bot())
+    loop.run_forever()
