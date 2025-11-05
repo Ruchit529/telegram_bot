@@ -3,7 +3,6 @@ import asyncio
 import threading
 import time
 import requests
-import re
 from flask import Flask
 from telegram import Update, MessageEntity
 from telegram.ext import (
@@ -24,9 +23,8 @@ SELF_URL = os.getenv("SELF_URL", "https://telegram_bot_w8pe.onrender.com")
 GROUP_LINK = "https://t.me/steam_games_chatt"  # ✅ your group link
 
 translator = GoogleTranslator(source="auto", target="en")
-
 pending_messages = {}
-MESSAGE_TIMEOUT = 120  # 2 minutes to auto-clear
+MESSAGE_TIMEOUT = 120  # 2 min cleanup
 
 
 # === SIMPLE FLASK WEB SERVER ===
@@ -36,18 +34,19 @@ app_web = Flask(__name__)
 def home():
     return "✅ Telegram bot is running on Render!", 200
 
+
 def run_web():
     port = int(os.getenv("PORT", 10000))
     print(f"🌐 Web server running on port {port}")
     app_web.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 
 
-# === KEEP-ALIVE PING ===
+# === KEEP ALIVE ===
 def ping_self():
     while True:
         try:
             res = requests.get(SELF_URL)
-            print(f"🔁 Pinged {SELF_URL} | Status: {res.status_code}")
+            print(f"🔁 Ping {SELF_URL} | Status: {res.status_code}")
         except Exception as e:
             print(f"⚠️ Ping failed: {e}")
         time.sleep(300)
@@ -56,108 +55,91 @@ def ping_self():
 # === CLEANUP PENDING ===
 def cleanup_pending():
     now = time.time()
-    to_delete = [uid for uid, data in pending_messages.items() if now - data["time"] > MESSAGE_TIMEOUT]
-    for uid in to_delete:
+    expired = [uid for uid, d in pending_messages.items() if now - d["time"] > MESSAGE_TIMEOUT]
+    for uid in expired:
         del pending_messages[uid]
 
 
-# === SAFE MARKDOWN ESCAPE ===
-def escape_markdown_v2(text: str) -> str:
+# === TEMPLATE BUILDER (Entity-safe) ===
+def build_template_with_entities(original_text: str, original_entities=None):
     """
-    Escapes Telegram MarkdownV2 reserved characters.
-    """
-    escape_chars = r"_*[]()~`>#+-=|{}.!\\"
-    return re.sub(f"([{re.escape(escape_chars)}])", r"\\\1", text)
-
-
-# === TEMPLATE BUILDER ===
-def build_template_with_entities(text: str, entities=None):
-    """
-    Builds final message template while keeping Telegram entities safe.
-    Falls back to MarkdownV2-safe text if entities are missing.
+    Builds a Telegram entity-safe message template:
+    👇👇👇
+    original message
+    👉 JOIN GROUP (clickable)
     """
     prefix = "👇👇👇\n\n"
-    suffix = f"\n\n👉 [JOIN GROUP]({GROUP_LINK})"
+    suffix = "\n\n👉 JOIN GROUP"
 
-    if entities:
-        # Keep native Telegram formatting
-        return prefix + text + suffix, entities
-    else:
-        # Fallback: Escape for MarkdownV2 safety
-        safe_text = escape_markdown_v2(text)
-        return prefix + safe_text + suffix, None
+    if original_text is None:
+        original_text = ""
 
+    full_text = prefix + original_text + suffix
+    new_entities = []
 
-# === SAFE SEND (handles long text + entities) ===
-async def safe_send(bot, chat_id, text, entities=None, is_caption=False):
-    try:
-        if entities:
-            if is_caption:
-                await bot.send_message(chat_id=chat_id, text=text, entities=entities, disable_web_page_preview=True)
-            else:
-                await bot.send_message(chat_id=chat_id, text=text, entities=entities, disable_web_page_preview=True)
-        else:
-            # Split long plain text messages
-            for i in range(0, len(text), 4000):
-                await bot.send_message(
-                    chat_id=chat_id,
-                    text=text[i:i+4000],
-                    parse_mode="MarkdownV2",
-                    disable_web_page_preview=True
+    # Preserve user formatting (bold, italic, monospace, etc.)
+    if original_entities:
+        for ent in original_entities:
+            shifted = ent.offset + len(prefix)
+            new_entities.append(
+                MessageEntity(
+                    type=ent.type,
+                    offset=shifted,
+                    length=ent.length,
+                    url=getattr(ent, "url", None),
+                    user=getattr(ent, "user", None),
+                    language=getattr(ent, "language", None)
                 )
-    except TelegramError as e:
-        print(f"⚠️ Send failed: {e}")
+            )
+
+    # Add JOIN GROUP clickable link
+    join_offset = len(full_text) - len("JOIN GROUP")
+    join_entity = MessageEntity(type="text_link", offset=join_offset, length=len("JOIN GROUP"), url=GROUP_LINK)
+    new_entities.append(join_entity)
+
+    return full_text, new_entities
 
 
 # === TELEGRAM BOT LOGIC ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     if user_id not in ALLOWED_USERS:
-        return await update.message.reply_text("🚫 You are not authorized.")
+        return await update.message.reply_text("🚫 You are not authorized to use this bot.")
     await update.message.reply_text("👋 Hi! Send text, photo, or video — I'll translate & confirm before posting.")
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cleanup_pending()
-    user_id = update.message.from_user.id
-    if user_id not in ALLOWED_USERS:
-        return await update.message.reply_text("🚫 You are not authorized to use this bot.")
-
     msg = update.message
+    user_id = msg.from_user.id
+
+    if user_id not in ALLOWED_USERS:
+        return await msg.reply_text("🚫 Unauthorized user.")
+
     text = msg.caption or msg.text
     entities = msg.caption_entities or msg.entities
     photo = msg.photo
     video = msg.video
 
-    # === CONFIRMATION HANDLING ===
+    # === CONFIRM HANDLING ===
     if user_id in pending_messages:
         response = (msg.text or "").strip().lower()
         data = pending_messages[user_id]
 
-        # ✅ Confirm send
+        # ✅ Confirm
         if response in ["yes", "y", "ok", "send"]:
             formatted_text, ents = build_template_with_entities(data["text"], data.get("entities"))
 
             for cid in CHANNEL_IDS:
                 try:
                     if data["type"] == "text":
-                        await safe_send(context.bot, cid, formatted_text, ents)
+                        await context.bot.send_message(chat_id=cid, text=formatted_text, entities=ents)
                     elif data["type"] == "photo":
-                        await context.bot.send_photo(
-                            chat_id=cid,
-                            photo=data["file_id"],
-                            caption=formatted_text,
-                            caption_entities=ents
-                        )
+                        await context.bot.send_photo(chat_id=cid, photo=data["file_id"], caption=formatted_text, caption_entities=ents)
                     elif data["type"] == "video":
-                        await context.bot.send_video(
-                            chat_id=cid,
-                            video=data["file_id"],
-                            caption=formatted_text,
-                            caption_entities=ents
-                        )
+                        await context.bot.send_video(chat_id=cid, video=data["file_id"], caption=formatted_text, caption_entities=ents)
                 except TelegramError as e:
-                    print(f"⚠️ Error sending to {cid}: {e}")
+                    print(f"⚠️ Failed to send to {cid}: {e}")
 
             await msg.reply_text("✅ Sent to all channels!")
             del pending_messages[user_id]
@@ -169,19 +151,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             del pending_messages[user_id]
             return
 
-        # ✏️ Edit content
+        # ✏️ Edit
         else:
             pending_messages[user_id]["text"] = msg.text
             pending_messages[user_id]["entities"] = msg.entities
             preview, ents = build_template_with_entities(msg.text, msg.entities)
             await msg.reply_text(
-                f"✏️ Updated text preview:\n\n{preview}\n\nNow reply 'Yes' to send.",
+                f"✏️ Updated preview:\n\n{preview}\n\nNow reply 'Yes' to send.",
                 entities=ents,
                 disable_web_page_preview=True
             )
             return
 
-    # === NEW MESSAGE HANDLING ===
+    # === NEW MESSAGE ===
     translated_text = translator.translate(text) if text else ""
     data = {
         "type": "text",
@@ -198,26 +180,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data["file_id"] = video.file_id
 
     pending_messages[user_id] = data
-
     preview, ents = build_template_with_entities(translated_text, entities)
+
     if photo:
-        await msg.reply_photo(
-            photo=data["file_id"],
-            caption=f"{preview}\n\nSend to channel? (Yes / No)",
-            caption_entities=ents
-        )
+        await msg.reply_photo(photo=data["file_id"], caption=f"{preview}\n\nSend to channel? (Yes / No)", caption_entities=ents)
     elif video:
-        await msg.reply_video(
-            video=data["file_id"],
-            caption=f"{preview}\n\nSend to channel? (Yes / No)",
-            caption_entities=ents
-        )
+        await msg.reply_video(video=data["file_id"], caption=f"{preview}\n\nSend to channel? (Yes / No)", caption_entities=ents)
     else:
-        await msg.reply_text(
-            f"{preview}\n\nSend to channel? (Yes / No)",
-            entities=ents,
-            disable_web_page_preview=True
-        )
+        await msg.reply_text(f"{preview}\n\nSend to channel? (Yes / No)", entities=ents, disable_web_page_preview=True)
 
 
 # === BOT RUNNER ===
