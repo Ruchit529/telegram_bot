@@ -19,8 +19,8 @@ from telegram.error import TelegramError
 # ===== CONFIG =====
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-CHANNEL_1 = "-1003052492544"  # Vanced Games
-CHANNEL_2 = "-1003238213356"  # Crunchyroll Anime
+CHANNEL_1 = "-1003052492544"
+CHANNEL_2 = "-1003238213356"
 
 ALLOWED_USERS = [7173549132]
 
@@ -32,10 +32,13 @@ translator = GoogleTranslator(source="auto", target="en")
 
 pending_messages = {}
 
+# NEW: notification toggle storage
+silent_mode = {}
+
 MESSAGE_TIMEOUT = 600
 
 
-# ===== FLASK SERVER (RENDER KEEP ALIVE) =====
+# ===== FLASK SERVER =====
 app_web = Flask(__name__)
 
 @app_web.route("/")
@@ -48,7 +51,7 @@ def run_web():
     app_web.run(host="0.0.0.0", port=port)
 
 
-# ===== KEEP ALIVE PING =====
+# ===== KEEP ALIVE =====
 def ping_self():
     if not SELF_URL:
         return
@@ -61,7 +64,7 @@ def ping_self():
         time.sleep(300)
 
 
-# ===== CLEANUP OLD POSTS =====
+# ===== CLEANUP =====
 def cleanup_pending():
     now = time.time()
 
@@ -84,9 +87,14 @@ def build_template(text):
 
 
 # ===== BUTTONS =====
-def buttons():
+def buttons(user_id):
+
+    silent = silent_mode.get(user_id, False)
+
+    toggle_text = "🔕 Silent Mode ON" if silent else "🔔 Notifications ON"
 
     keyboard = [
+        [InlineKeyboardButton(toggle_text, callback_data="toggle_notify")],
         [InlineKeyboardButton("✏ Edit Caption", callback_data="edit")],
         [
             InlineKeyboardButton("🎮 Vanced Games", callback_data="vanced"),
@@ -99,7 +107,7 @@ def buttons():
     return InlineKeyboardMarkup(keyboard)
 
 
-# ===== START COMMAND =====
+# ===== START =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_id = update.message.from_user.id
@@ -139,7 +147,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(
                 build_template(translated),
                 parse_mode="Markdown",
-                reply_markup=buttons()
+                reply_markup=buttons(user_id)
             )
 
         context.user_data["editing"] = False
@@ -176,7 +184,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             photo=file_id,
             caption=build_template(translated),
             parse_mode="Markdown",
-            reply_markup=buttons()
+            reply_markup=buttons(user_id)
         )
 
 
@@ -196,7 +204,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             video=file_id,
             caption=build_template(translated),
             parse_mode="Markdown",
-            reply_markup=buttons()
+            reply_markup=buttons(user_id)
         )
 
 
@@ -212,7 +220,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             build_template(translated),
             parse_mode="Markdown",
-            reply_markup=buttons()
+            reply_markup=buttons(user_id)
         )
 
 
@@ -228,10 +236,25 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("Message expired.")
         return
 
+
+    # === TOGGLE NOTIFICATION ===
+    if query.data == "toggle_notify":
+
+        current = silent_mode.get(user_id, False)
+
+        silent_mode[user_id] = not current
+
+        await query.edit_message_reply_markup(
+            reply_markup=buttons(user_id)
+        )
+
+        return
+
+
     data = pending_messages[user_id]
 
 
-    # === EDIT BUTTON ===
+    # === EDIT ===
     if query.data == "edit":
 
         context.user_data["editing"] = True
@@ -261,6 +284,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         channels = [CHANNEL_1, CHANNEL_2]
 
 
+    silent = silent_mode.get(user_id, False)
+
+
     for cid in channels:
 
         try:
@@ -272,6 +298,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     text=build_template(data["text"]),
                     parse_mode="Markdown",
                     disable_web_page_preview=True,
+                    disable_notification=silent
                 )
 
             elif data["type"] == "photo":
@@ -281,6 +308,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     photo=data["file_id"],
                     caption=build_template(data["text"]),
                     parse_mode="Markdown",
+                    disable_notification=silent
                 )
 
             elif data["type"] == "video":
@@ -290,6 +318,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     video=data["file_id"],
                     caption=build_template(data["text"]),
                     parse_mode="Markdown",
+                    disable_notification=silent
                 )
 
         except TelegramError:
@@ -301,7 +330,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text("✅ Post sent.")
 
 
-# ===== BOT START =====
+# ===== RUN BOT =====
 def run_bot():
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
