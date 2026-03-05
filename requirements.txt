@@ -2,3 +2,5 @@ python-telegram-bot==20.7
 Flask
 deep-translator
 requests
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import CallbackQueryHandler
