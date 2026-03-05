@@ -33,6 +33,8 @@ SELF_URL = os.getenv("SELF_URL", "")
 translator = GoogleTranslator(source="auto", target="en")
 
 pending_messages = {}
+
+# toggles
 silent_mode = {}
 button_mode = {}
 
@@ -44,7 +46,7 @@ app_web = Flask(__name__)
 
 @app_web.route("/")
 def home():
-    return "Bot alive", 200
+    return "Bot Alive", 200
 
 
 def run_web():
@@ -56,14 +58,17 @@ def run_web():
 session = requests.Session()
 
 def ping_self():
+
     if not SELF_URL:
         return
 
     while True:
+
         try:
             session.get(SELF_URL, timeout=10)
         except:
             pass
+
         time.sleep(300)
 
 
@@ -87,14 +92,14 @@ def build_template(text, link):
     return f"👇👇👇\n\n{text or ''}\n\n👉 [JOIN GROUP]({link})"
 
 
-# ===== CHANNEL BUTTON =====
-def post_button(link):
+# ===== POST BUTTON =====
+def post_button(name, link):
 
     if not link:
         return None
 
     keyboard = [
-        [InlineKeyboardButton("🔗 Open Link", url=link)]
+        [InlineKeyboardButton(name, url=link)]
     ]
 
     return InlineKeyboardMarkup(keyboard)
@@ -104,14 +109,14 @@ def post_button(link):
 def buttons(user_id):
 
     silent = silent_mode.get(user_id, False)
-    button_on = button_mode.get(user_id, False)
+    button = button_mode.get(user_id, False)
 
-    notify = "🔕 Silent ON" if silent else "🔔 Notifications ON"
-    button = "🔘 Button Mode ON" if button_on else "⚪ Button Mode OFF"
+    notify_text = "🔕 Silent Mode ON" if silent else "🔔 Silent Mode OFF"
+    button_text = "🔘 Button Mode ON" if button else "⚪ Button Mode OFF"
 
     keyboard = [
-        [InlineKeyboardButton(notify, callback_data="toggle_notify")],
-        [InlineKeyboardButton(button, callback_data="toggle_button")],
+        [InlineKeyboardButton(notify_text, callback_data="toggle_notify")],
+        [InlineKeyboardButton(button_text, callback_data="toggle_button")],
         [InlineKeyboardButton("✏ Edit Caption", callback_data="edit")],
         [
             InlineKeyboardButton("🎮 Vanced Games", callback_data="vanced"),
@@ -124,7 +129,7 @@ def buttons(user_id):
     return InlineKeyboardMarkup(keyboard)
 
 
-# ===== FAST TRANSLATION =====
+# ===== TRANSLATION =====
 async def translate_text(text):
 
     if not text:
@@ -145,7 +150,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.message.reply_text(
-        "Send text/photo/video.\nPreview will appear."
+        "Send text/photo/video to create a post."
     )
 
 
@@ -160,17 +165,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
 
-    # ===== CAPTURE LINK =====
+    # ===== BUTTON NAME INPUT =====
     if user_id in pending_messages:
 
         data = pending_messages[user_id]
 
-        if button_mode.get(user_id, False) and data.get("link") is None and update.message.text:
+        if button_mode.get(user_id, False) and data.get("button_name") is None:
 
-            data["link"] = update.message.text
+            data["button_name"] = update.message.text
+
+            await update.message.reply_text("Now send button link.")
+
+            return
+
+
+        if button_mode.get(user_id, False) and data.get("button_link") is None:
+
+            data["button_link"] = update.message.text
 
             await update.message.reply_text(
-                "Link saved. Choose channel.",
+                "Button saved. Choose channel.",
                 reply_markup=buttons(user_id)
             )
 
@@ -205,7 +219,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = {
         "text": translated,
         "time": time.time(),
-        "link": None
+        "button_name": None,
+        "button_link": None
     }
 
     if photo:
@@ -244,15 +259,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if button_mode.get(user_id, False):
 
-        await update.message.reply_text(
-            "🔗 Send button link now."
-        )
+        await update.message.reply_text("Send button name.")
 
 
 # ===== SEND POST =====
 async def send_post(context, cid, data, silent):
 
-    link = VANCED_GROUP if cid == CHANNEL_1 else CRUNCHY_GROUP
+    group_link = VANCED_GROUP if cid == CHANNEL_1 else CRUNCHY_GROUP
+
+    markup = post_button(data["button_name"], data["button_link"])
 
     try:
 
@@ -260,11 +275,11 @@ async def send_post(context, cid, data, silent):
 
             await context.bot.send_message(
                 chat_id=cid,
-                text=build_template(data["text"], link),
+                text=build_template(data["text"], group_link),
                 parse_mode="Markdown",
                 disable_web_page_preview=True,
                 disable_notification=silent,
-                reply_markup=post_button(data.get("link"))
+                reply_markup=markup
             )
 
         elif data["type"] == "photo":
@@ -272,10 +287,10 @@ async def send_post(context, cid, data, silent):
             await context.bot.send_photo(
                 chat_id=cid,
                 photo=data["file_id"],
-                caption=build_template(data["text"], link),
+                caption=build_template(data["text"], group_link),
                 parse_mode="Markdown",
                 disable_notification=silent,
-                reply_markup=post_button(data.get("link"))
+                reply_markup=markup
             )
 
         else:
@@ -283,10 +298,10 @@ async def send_post(context, cid, data, silent):
             await context.bot.send_video(
                 chat_id=cid,
                 video=data["file_id"],
-                caption=build_template(data["text"], link),
+                caption=build_template(data["text"], group_link),
                 parse_mode="Markdown",
                 disable_notification=silent,
-                reply_markup=post_button(data.get("link"))
+                reply_markup=markup
             )
 
     except TelegramError:
