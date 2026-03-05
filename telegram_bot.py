@@ -20,8 +20,8 @@ from telegram.error import TelegramError
 # === CONFIGURATION ===
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-CHANNEL_1 = "-1003052492544"  # Vanced Games
-CHANNEL_2 = "-1003238213356"  # Crunchyroll Anime
+CHANNEL_1 = "-1003052492544"
+CHANNEL_2 = "-1003238213356"
 
 ALLOWED_USERS = [7173549132]
 
@@ -32,7 +32,7 @@ GROUP_LINK = "https://t.me/steam_games_chatt"
 translator = GoogleTranslator(source="auto", target="en")
 
 pending_messages = {}
-MESSAGE_TIMEOUT = 120
+MESSAGE_TIMEOUT = 600
 
 
 # === FLASK SERVER ===
@@ -40,66 +40,70 @@ app_web = Flask(__name__)
 
 @app_web.route('/')
 def home():
-    return "✅ Telegram bot is running on Render!", 200
+    return "Bot running", 200
 
 
 def run_web():
     port = int(os.getenv("PORT", 10000))
-    print(f"🌐 Web server running on port {port}")
-    app_web.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+    app_web.run(host="0.0.0.0", port=port)
 
 
 # === KEEP ALIVE ===
 def ping_self():
     while True:
         try:
-            res = requests.get(SELF_URL)
-            print(f"🔁 Pinged {SELF_URL} | Status: {res.status_code}")
-        except Exception as e:
-            print(f"⚠️ Ping failed: {e}")
+            requests.get(SELF_URL)
+        except:
+            pass
         time.sleep(300)
 
 
 # === CLEANUP ===
 def cleanup_pending():
     now = time.time()
-    to_delete = [
+
+    expired = [
         uid for uid, data in pending_messages.items()
         if now - data["time"] > MESSAGE_TIMEOUT
     ]
-    for uid in to_delete:
+
+    for uid in expired:
         del pending_messages[uid]
 
 
-# === MESSAGE TEMPLATE ===
-def build_template(message_text: str) -> str:
-    return f"👇👇👇\n\n{message_text}\n\n👉 [JOIN GROUP]({GROUP_LINK})"
+# === TEMPLATE ===
+def build_template(text):
+
+    if not text:
+        text = ""
+
+    return f"👇👇👇\n\n{text}\n\n👉 [JOIN GROUP]({GROUP_LINK})"
 
 
 # === BUTTONS ===
 def get_buttons():
+
     keyboard = [
+        [InlineKeyboardButton("✏ Edit Caption", callback_data="edit")],
         [
-            InlineKeyboardButton("🎮 Vanced Games", callback_data="send_vanced"),
-            InlineKeyboardButton("🍿 Crunchyroll Anime", callback_data="send_crunchy"),
+            InlineKeyboardButton("🎮 Vanced Games", callback_data="vanced"),
+            InlineKeyboardButton("🍿 Crunchyroll Anime", callback_data="crunchy"),
         ],
-        [
-            InlineKeyboardButton("🚀 Send to Both", callback_data="send_both"),
-            InlineKeyboardButton("❌ Cancel", callback_data="cancel"),
-        ],
+        [InlineKeyboardButton("🚀 Send to Both", callback_data="both")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="cancel")],
     ]
+
     return InlineKeyboardMarkup(keyboard)
 
 
 # === START ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
 
-    if user_id not in ALLOWED_USERS:
-        return await update.message.reply_text("🚫 You are not authorized to use this bot.")
+    if update.message.from_user.id not in ALLOWED_USERS:
+        return
 
     await update.message.reply_text(
-        "👋 Send text, photo, or video.\nI will translate and show preview before posting."
+        "Send text, image, or video.\nPreview will appear with buttons."
     )
 
 
@@ -111,14 +115,41 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
 
     if user_id not in ALLOWED_USERS:
-        return await update.message.reply_text("🚫 You are not authorized to use this bot.")
+        return
+
+    # === Editing caption ===
+    if context.user_data.get("editing"):
+
+        if user_id in pending_messages:
+
+            pending_messages[user_id]["text"] = translator.translate(update.message.text)
+
+            data = pending_messages[user_id]
+
+            await update.message.reply_text(
+                build_template(data["text"]),
+                parse_mode="Markdown",
+                reply_markup=get_buttons()
+            )
+
+        context.user_data["editing"] = False
+        return
+
 
     text = update.message.caption or update.message.text
     photo = update.message.photo
     video = update.message.video
 
-    translated_text = translator.translate(text) if text else ""
+    if text:
+        try:
+            translated = translator.translate(text)
+        except:
+            translated = text
+    else:
+        translated = ""
 
+
+    # === PHOTO ===
     if photo:
 
         file_id = photo[-1].file_id
@@ -126,17 +157,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pending_messages[user_id] = {
             "type": "photo",
             "file_id": file_id,
-            "text": translated_text,
-            "time": time.time(),
+            "text": translated,
+            "time": time.time()
         }
 
         await update.message.reply_photo(
             photo=file_id,
-            caption=build_template(translated_text),
+            caption=build_template(translated),
             parse_mode="Markdown",
             reply_markup=get_buttons()
         )
 
+
+    # === VIDEO ===
     elif video:
 
         file_id = video.file_id
@@ -144,33 +177,32 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pending_messages[user_id] = {
             "type": "video",
             "file_id": file_id,
-            "text": translated_text,
-            "time": time.time(),
+            "text": translated,
+            "time": time.time()
         }
 
         await update.message.reply_video(
             video=file_id,
-            caption=build_template(translated_text),
+            caption=build_template(translated),
             parse_mode="Markdown",
             reply_markup=get_buttons()
         )
 
+
+    # === TEXT ===
     elif text:
 
         pending_messages[user_id] = {
             "type": "text",
-            "text": translated_text,
-            "time": time.time(),
+            "text": translated,
+            "time": time.time()
         }
 
         await update.message.reply_text(
-            build_template(translated_text),
+            build_template(translated),
             parse_mode="Markdown",
             reply_markup=get_buttons()
         )
-
-    else:
-        await update.message.reply_text("⚠️ Please send text, photo, or video.")
 
 
 # === BUTTON HANDLER ===
@@ -182,27 +214,45 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
 
     if user_id not in pending_messages:
-        await query.edit_message_text("⚠️ Message expired.")
+        await query.edit_message_text("Message expired.")
         return
 
     data = pending_messages[user_id]
 
-    channels = []
+    # === EDIT ===
+    if query.data == "edit":
 
-    if query.data == "send_vanced":
-        channels = [CHANNEL_1]
+        context.user_data["editing"] = True
 
-    elif query.data == "send_crunchy":
-        channels = [CHANNEL_2]
-
-    elif query.data == "send_both":
-        channels = [CHANNEL_1, CHANNEL_2]
-
-    elif query.data == "cancel":
-        del pending_messages[user_id]
-        await query.edit_message_text("❌ Cancelled.")
+        await query.message.reply_text(
+            "Send the new caption now."
+        )
         return
 
+
+    # === CANCEL ===
+    if query.data == "cancel":
+
+        del pending_messages[user_id]
+
+        await query.edit_message_text("Cancelled.")
+        return
+
+
+    # === CHANNEL SELECTION ===
+    channels = []
+
+    if query.data == "vanced":
+        channels = [CHANNEL_1]
+
+    elif query.data == "crunchy":
+        channels = [CHANNEL_2]
+
+    elif query.data == "both":
+        channels = [CHANNEL_1, CHANNEL_2]
+
+
+    # === SEND POST ===
     for cid in channels:
 
         try:
@@ -237,9 +287,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except TelegramError:
             pass
 
-    await query.edit_message_text("✅ Message sent successfully!")
 
     del pending_messages[user_id]
+
+    await query.edit_message_text("✅ Post sent successfully!")
 
 
 # === BOT RUNNER ===
@@ -249,17 +300,13 @@ async def run_bot():
 
     app_tg.add_handler(CommandHandler("start", start))
 
-    app_tg.add_handler(MessageHandler(filters.TEXT | filters.PHOTO | filters.VIDEO, handle_message))
+    app_tg.add_handler(MessageHandler(filters.ALL, handle_message))
 
     app_tg.add_handler(CallbackQueryHandler(button_handler))
 
-    print("🚀 Telegram bot is running...")
+    print("Bot started")
 
-    await app_tg.initialize()
-    await app_tg.start()
-    await app_tg.updater.start_polling()
-
-    await asyncio.Event().wait()
+    await app_tg.run_polling()
 
 
 # === MAIN ===
