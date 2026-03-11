@@ -26,7 +26,7 @@ CHANNEL_2 = "-1003238213356"
 VANCED_GROUP = "https://t.me/steam_games_chatt"
 CRUNCHY_GROUP = "https://t.me/Crunchyroll_Anime_Chatt"
 
-ALLOWED_USERS = {7173549132}
+ALLOWED_USERS = {7173549132,7050803817}
 
 SELF_URL = os.getenv("SELF_URL", "")
 
