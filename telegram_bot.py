@@ -184,18 +184,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ===== FOOTER REMOVE =====
     if context.user_data.get("remove_footer"):
-    group = context.user_data.pop("remove_footer")
-    if text in footer_channels[group]:
-        footer_channels[group].remove(text)
-        await update.message.reply_text(f"❌ Removed from {group}")
+        group = context.user_data.pop("remove_footer")
+        if text in footer_channels[group]:
+            footer_channels[group].remove(text)
+            await update.message.reply_text(f"❌ Removed from {group}")
     else:
         await update.message.reply_text("Not found")
     return
-            await update.message.reply_text("❌ Removed")
-        else:
-            await update.message.reply_text("Not found")
-        context.user_data.pop("remove_footer")
-        return
 
     # ===== NEW POST =====
     pending_messages[uid] = {"text": text, "buttons": []}
