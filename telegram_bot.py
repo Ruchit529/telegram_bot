@@ -21,10 +21,9 @@ SELF_URL = os.getenv("SELF_URL", "")
 pending_messages = {}
 silent_mode = {}
 
-channel_links = ["@free_crunchyroll_account_4u"]
 channel_groups = {"vanced": [], "crunchy": []}
 
-# ===== WEB SERVER (FIXED) =====
+# ===== WEB SERVER =====
 app_web = Flask(__name__)
 
 @app_web.route("/")
@@ -45,16 +44,9 @@ def ping():
                 pass
         time.sleep(300)
 
-# ===== TEMPLATE =====
+# ===== TEMPLATE (NO FOOTER) =====
 def build_template(text):
-    msg = f"👇👇👇\n\n{text}\n\n"
-
-    if channel_links:
-        msg += "Join Backup Channel 👇\n\n"
-        for ch in channel_links:
-            msg += f"👉 {ch}\n"
-
-    return msg.strip()
+    return f"👇👇👇\n\n{text}".strip()
 
 # ===== BUTTONS =====
 def preview_buttons(user_id):
@@ -80,7 +72,6 @@ def build_post_buttons(btns):
 def panel_menu():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📡 Post Channels", callback_data="p_post")],
-        [InlineKeyboardButton("📺 Footer Channels", callback_data="p_footer")],
         [InlineKeyboardButton("❌ Close", callback_data="p_close")]
     ])
 
@@ -89,13 +80,6 @@ def panel_post():
         [InlineKeyboardButton("➕ Add Vanced", callback_data="add_v")],
         [InlineKeyboardButton("➕ Add Crunchy", callback_data="add_c")],
         [InlineKeyboardButton("📋 Show Channels", callback_data="show_p")],
-        [InlineKeyboardButton("🔙 Back", callback_data="p_back")]
-    ])
-
-def panel_footer():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("➕ Add Footer", callback_data="add_f")],
-        [InlineKeyboardButton("📋 Show Footer", callback_data="show_f")],
         [InlineKeyboardButton("🔙 Back", callback_data="p_back")]
     ])
 
@@ -117,7 +101,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = update.message.text or ""
 
-    # ===== PANEL INPUT =====
+    # PANEL INPUT
     if context.user_data.get("add_post"):
         group = context.user_data.pop("add_post")
 
@@ -131,20 +115,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"✅ Added to {group}")
         return
 
-    if context.user_data.get("add_footer"):
-        context.user_data.pop("add_footer")
-
-        if not text.startswith("@"):
-            await update.message.reply_text("❌ Must be @channel")
-            return
-
-        if text not in channel_links:
-            channel_links.append(text)
-
-        await update.message.reply_text("✅ Footer added")
-        return
-
-    # ===== BUTTON CREATION =====
+    # BUTTON CREATION FLOW
     if uid in pending_messages:
         data = pending_messages[uid]
 
@@ -160,7 +131,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("✅ Button added", reply_markup=preview_buttons(uid))
                 return
 
-    # ===== NEW POST =====
+    # NEW POST
     pending_messages[uid] = {
         "text": text,
         "buttons": [],
@@ -178,24 +149,22 @@ async def send(context, cid, data):
         reply_markup=build_post_buttons(data["buttons"])
     )
 
-# ===== CALLBACK =====
+# ===== CALLBACK HANDLER =====
 async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     q = update.callback_query
     await q.answer()
     uid = q.from_user.id
 
-    # ===== PANEL NAV =====
+    # PANEL NAV
     if q.data == "p_post":
         await q.edit_message_text("📡 Post Channels", reply_markup=panel_post()); return
-    if q.data == "p_footer":
-        await q.edit_message_text("📺 Footer Channels", reply_markup=panel_footer()); return
     if q.data == "p_back":
         await q.edit_message_text("⚙️ Admin Panel", reply_markup=panel_menu()); return
     if q.data == "p_close":
         await q.message.delete(); return
 
-    # ===== PANEL ACTIONS =====
+    # PANEL ACTIONS
     if q.data == "add_v":
         context.user_data["add_post"] = "vanced"
         await q.message.reply_text("Enter channel ID (-100...)"); return
@@ -204,10 +173,6 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["add_post"] = "crunchy"
         await q.message.reply_text("Enter channel ID (-100...)"); return
 
-    if q.data == "add_f":
-        context.user_data["add_footer"] = True
-        await q.message.reply_text("Enter @channel"); return
-
     if q.data == "show_p":
         text = "📡 Channels:\n\n"
         for g, ids in channel_groups.items():
@@ -215,10 +180,7 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text += ("\n".join(ids) if ids else "none") + "\n\n"
         await q.message.reply_text(text); return
 
-    if q.data == "show_f":
-        await q.message.reply_text("\n".join(channel_links) or "none"); return
-
-    # ===== NORMAL FLOW =====
+    # NORMAL FLOW
     if uid not in pending_messages:
         return
 
@@ -247,7 +209,7 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.message.reply_text("Send new text")
         return
 
-    # SEND LOGIC
+    # SEND
     if q.data == "vanced":
         targets = channel_groups["vanced"]
     elif q.data == "crunchy":
