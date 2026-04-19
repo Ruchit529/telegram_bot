@@ -1,7 +1,8 @@
 import os
-import json
-import asyncio
-import logging
+import threading
+import time
+import requests
+from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
@@ -12,109 +13,115 @@ from telegram.ext import (
     filters,
 )
 
-# ===== LOGGING =====
-logging.basicConfig(level=logging.INFO)
-
 # ===== CONFIG =====
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ALLOWED_USERS = {7173549132, 7050803817}
-DATA_FILE = "data.json"
+SELF_URL = os.getenv("SELF_URL", "")
 
-# ===== LOAD / SAVE =====
-def load_data():
-    if not os.path.exists(DATA_FILE):
-        return {
-            "groups": {"vanced": [], "crunchy": []},
-            "footer": {
-                "enabled": True,
-                "title": "Join Backup Channel 👇",
-                "channels": []
-            }
-        }
-    with open(DATA_FILE) as f:
-        return json.load(f)
-
-def save_data():
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f, indent=2)
-
-data = load_data()
 pending_messages = {}
+silent_mode = {}
+
+channel_groups = {"vanced": [], "crunchy": []}
+
+# ===== FOOTER SYSTEM =====
+footer_enabled = True
+footer_title = "Join Backup Channel 👇"
+footer_channels = []
+
+# ===== WEB =====
+app_web = Flask(__name__)
+
+@app_web.route("/")
+def home():
+    return "Bot Running"
+
+def run_web():
+    port = int(os.getenv("PORT", 10000))
+    app_web.run(host="0.0.0.0", port=port)
+
+def ping():
+    while True:
+        if SELF_URL:
+            try:
+                requests.get(SELF_URL)
+            except:
+                pass
+        time.sleep(300)
 
 # ===== TEMPLATE =====
 def build_template(text):
     msg = f"👇👇👇\n\n{text}\n\n"
-    f = data["footer"]
 
-    if f["enabled"] and f["channels"]:
-        msg += f"{f['title']}\n\n"
-        for ch in f["channels"]:
+    if footer_enabled and footer_channels:
+        msg += f"{footer_title}\n\n"
+        for ch in footer_channels:
             msg += f"👉 {ch}\n"
 
     return msg.strip()
 
 # ===== BUTTONS =====
-def preview_buttons(uid):
-    f = data["footer"]["enabled"]
+def preview_buttons(user_id):
+    silent = silent_mode.get(user_id, False)
 
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📺 Footer ON" if f else "📺 Footer OFF", callback_data="toggle_footer")],
+        [InlineKeyboardButton("🔕 Silent ON" if silent else "🔔 Silent OFF", callback_data="toggle")],
+        [InlineKeyboardButton("📺 Footer ON" if footer_enabled else "📺 Footer OFF", callback_data="toggle_footer")],
         [InlineKeyboardButton("➕ Add Button", callback_data="add_btn")],
         [
-            InlineKeyboardButton("🎮 Vanced", callback_data="vanced"),
-            InlineKeyboardButton("🍿 Crunchy", callback_data="crunchy")
+            InlineKeyboardButton("🎮 Vanced Games", callback_data="vanced"),
+            InlineKeyboardButton("🍿 Crunchyroll Anime", callback_data="crunchy"),
         ],
-        [InlineKeyboardButton("🚀 Send Both", callback_data="both")],
+        [InlineKeyboardButton("🚀 Send to Both", callback_data="both")],
         [InlineKeyboardButton("❌ Cancel", callback_data="cancel")]
     ])
 
-def post_buttons(btns):
+def build_post_buttons(btns):
     if not btns:
         return None
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton(b["name"], url=b["link"])] for b in btns
-    ])
+    return InlineKeyboardMarkup([[InlineKeyboardButton(b["name"], url=b["link"])] for b in btns])
 
 # ===== PANEL =====
-def panel():
+def panel_menu():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📡 Post Channels", callback_data="p_post")],
         [InlineKeyboardButton("📺 Footer Settings", callback_data="p_footer")],
-        [InlineKeyboardButton("❌ Close", callback_data="close")]
+        [InlineKeyboardButton("❌ Close", callback_data="p_close")]
     ])
 
-def post_panel():
+def panel_post():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("➕ Add Vanced", callback_data="add_v")],
         [InlineKeyboardButton("➕ Add Crunchy", callback_data="add_c")],
         [
-            InlineKeyboardButton("➖ Remove Vanced", callback_data="rem_v"),
-            InlineKeyboardButton("➖ Remove Crunchy", callback_data="rem_c"),
+            InlineKeyboardButton("➖ Remove Vanced", callback_data="remove_v"),
+            InlineKeyboardButton("➖ Remove Crunchy", callback_data="remove_c"),
         ],
         [InlineKeyboardButton("📋 Show Channels", callback_data="show_p")],
-        [InlineKeyboardButton("🔙 Back", callback_data="back")]
+        [InlineKeyboardButton("🔙 Back", callback_data="p_back")]
     ])
 
-def footer_panel():
+def panel_footer():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("✏ Set Title", callback_data="set_title")],
+        [InlineKeyboardButton("✏ Set Title", callback_data="set_footer_title")],
         [InlineKeyboardButton("➕ Add Channel", callback_data="add_footer")],
-        [InlineKeyboardButton("➖ Remove Channel", callback_data="rem_footer")],
+        [InlineKeyboardButton("➖ Remove Channel", callback_data="remove_footer")],
         [InlineKeyboardButton("📋 Show Footer", callback_data="show_footer")],
-        [InlineKeyboardButton("🔙 Back", callback_data="back")]
+        [InlineKeyboardButton("🔙 Back", callback_data="p_back")]
     ])
 
 # ===== COMMANDS =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ALLOWED_USERS:
         return
-    await update.message.reply_text("Send post")
+    await update.message.reply_text("Send post content")
 
-async def panel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("⚙️ Panel", reply_markup=panel())
+async def panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("⚙️ Admin Panel", reply_markup=panel_menu())
 
-# ===== MESSAGE HANDLER =====
+# ===== MESSAGE =====
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    global footer_title
 
     uid = update.effective_user.id
     if uid not in ALLOWED_USERS:
@@ -122,83 +129,56 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = update.message.text or ""
 
-    # ADD CHANNEL
-    if context.user_data.get("add"):
-        g = context.user_data.pop("add")
-
-        if not text.startswith("-100"):
-            await update.message.reply_text("❌ Invalid ID")
-            return
-
-        if text not in data["groups"][g]:
-            data["groups"][g].append(text)
-            save_data()
-
-        await update.message.reply_text(f"✅ Added to {g}")
-        return
-
-    # REMOVE CHANNEL
-    if context.user_data.get("remove"):
-        g = context.user_data.pop("remove")
-
-        if text in data["groups"][g]:
-            data["groups"][g].remove(text)
-            save_data()
-            await update.message.reply_text(f"❌ Removed from {g}")
+    # ===== POST CHANNEL ADD =====
+    if context.user_data.get("add_post"):
+        group = context.user_data.pop("add_post")
+        if text.startswith("-100"):
+            if text not in channel_groups[group]:
+                channel_groups[group].append(text)
+            await update.message.reply_text(f"✅ Added to {group}")
         else:
-            await update.message.reply_text("⚠️ Not found")
-
+            await update.message.reply_text("❌ Invalid ID")
         return
 
-    # FOOTER TITLE
-    if context.user_data.get("title"):
-        data["footer"]["title"] = text
-        context.user_data.clear()
-        save_data()
-        await update.message.reply_text("✅ Title updated")
+    # ===== POST CHANNEL REMOVE =====
+    if context.user_data.get("remove_post"):
+        group = context.user_data.pop("remove_post")
+        if text in channel_groups[group]:
+            channel_groups[group].remove(text)
+            await update.message.reply_text(f"❌ Removed from {group}")
+        else:
+            await update.message.reply_text("Not found")
         return
 
-    # FOOTER ADD
+    # ===== FOOTER TITLE =====
+    if context.user_data.get("set_footer_title"):
+        footer_title = text
+        context.user_data.pop("set_footer_title")
+        await update.message.reply_text("✅ Footer title updated")
+        return
+
+    # ===== FOOTER ADD =====
     if context.user_data.get("add_footer"):
         if text.startswith("@"):
-            if text not in data["footer"]["channels"]:
-                data["footer"]["channels"].append(text)
-                save_data()
-            await update.message.reply_text("✅ Added")
+            if text not in footer_channels:
+                footer_channels.append(text)
+            await update.message.reply_text("✅ Channel added")
         else:
             await update.message.reply_text("❌ Must be @channel")
-
-        context.user_data.clear()
+        context.user_data.pop("add_footer")
         return
 
-    # FOOTER REMOVE
-    if context.user_data.get("rem_footer"):
-        if text in data["footer"]["channels"]:
-            data["footer"]["channels"].remove(text)
-            save_data()
+    # ===== FOOTER REMOVE =====
+    if context.user_data.get("remove_footer"):
+        if text in footer_channels:
+            footer_channels.remove(text)
             await update.message.reply_text("❌ Removed")
         else:
-            await update.message.reply_text("⚠️ Not found")
-
-        context.user_data.clear()
+            await update.message.reply_text("Not found")
+        context.user_data.pop("remove_footer")
         return
 
-    # BUTTON FLOW
-    if uid in pending_messages:
-        d = pending_messages[uid]
-
-        if d.get("add_btn"):
-            if "name" not in d:
-                d["name"] = text
-                await update.message.reply_text("Send button link")
-            else:
-                d["buttons"].append({"name": d["name"], "link": text})
-                d.pop("name")
-                d["add_btn"] = False
-                await update.message.reply_text("✅ Button added", reply_markup=preview_buttons(uid))
-            return
-
-    # NEW POST
+    # ===== NEW POST =====
     pending_messages[uid] = {"text": text, "buttons": []}
 
     await update.message.reply_text(
@@ -206,8 +186,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=preview_buttons(uid)
     )
 
+# ===== SEND =====
+async def send(context, cid, data):
+    await context.bot.send_message(
+        chat_id=cid,
+        text=build_template(data["text"]),
+        reply_markup=build_post_buttons(data["buttons"])
+    )
+
 # ===== CALLBACK =====
 async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    global footer_enabled
 
     q = update.callback_query
     await q.answer()
@@ -215,128 +205,92 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # PANEL NAV
     if q.data == "p_post":
-        await q.edit_message_text("📡 Post Channels", reply_markup=post_panel())
-        return
-
+        await q.edit_message_text("📡 Post Channels", reply_markup=panel_post()); return
     if q.data == "p_footer":
-        await q.edit_message_text("📺 Footer Settings", reply_markup=footer_panel())
-        return
-
-    if q.data == "back":
-        await q.edit_message_text("⚙️ Panel", reply_markup=panel())
-        return
-
-    if q.data == "close":
-        await q.message.delete()
-        return
+        await q.edit_message_text("📺 Footer Settings", reply_markup=panel_footer()); return
+    if q.data == "p_back":
+        await q.edit_message_text("⚙️ Admin Panel", reply_markup=panel_menu()); return
+    if q.data == "p_close":
+        await q.message.delete(); return
 
     # POST CHANNEL
     if q.data == "add_v":
-        context.user_data["add"] = "vanced"
-        await q.message.reply_text("Send channel ID (-100...)")
-        return
-
+        context.user_data["add_post"] = "vanced"
+        await q.message.reply_text("Send channel ID"); return
     if q.data == "add_c":
-        context.user_data["add"] = "crunchy"
-        await q.message.reply_text("Send channel ID (-100...)")
-        return
-
-    if q.data == "rem_v":
-        context.user_data["remove"] = "vanced"
-        await q.message.reply_text("Send ID to remove")
-        return
-
-    if q.data == "rem_c":
-        context.user_data["remove"] = "crunchy"
-        await q.message.reply_text("Send ID to remove")
-        return
-
+        context.user_data["add_post"] = "crunchy"
+        await q.message.reply_text("Send channel ID"); return
+    if q.data == "remove_v":
+        context.user_data["remove_post"] = "vanced"
+        await q.message.reply_text("Send ID to remove"); return
+    if q.data == "remove_c":
+        context.user_data["remove_post"] = "crunchy"
+        await q.message.reply_text("Send ID to remove"); return
     if q.data == "show_p":
-        text = "📡 Channels:\n\n"
-        for g, ids in data["groups"].items():
-            text += f"{g.upper()}:\n"
-            text += ("\n".join(ids) if ids else "none") + "\n\n"
-        await q.message.reply_text(text)
-        return
+        text = ""
+        for g, ids in channel_groups.items():
+            text += f"{g}:\n" + ("\n".join(ids) or "none") + "\n\n"
+        await q.message.reply_text(text); return
 
     # FOOTER
-    if q.data == "set_title":
-        context.user_data["title"] = True
-        await q.message.reply_text("Send new title")
-        return
-
+    if q.data == "set_footer_title":
+        context.user_data["set_footer_title"] = True
+        await q.message.reply_text("Send new title"); return
     if q.data == "add_footer":
         context.user_data["add_footer"] = True
-        await q.message.reply_text("Send @channel")
-        return
-
-    if q.data == "rem_footer":
-        context.user_data["rem_footer"] = True
-        await q.message.reply_text("Send @channel to remove")
-        return
-
+        await q.message.reply_text("Send @channel"); return
+    if q.data == "remove_footer":
+        context.user_data["remove_footer"] = True
+        await q.message.reply_text("Send channel to remove"); return
     if q.data == "show_footer":
-        f = data["footer"]
-        txt = f"{f['title']}\n\n" + ("\n".join(f["channels"]) or "none")
-        await q.message.reply_text(txt)
-        return
+        text = footer_title + "\n\n" + ("\n".join(footer_channels) or "none")
+        await q.message.reply_text(text); return
 
     # NORMAL FLOW
     if uid not in pending_messages:
         return
 
-    d = pending_messages[uid]
+    data = pending_messages[uid]
 
     if q.data == "cancel":
         pending_messages.pop(uid, None)
         context.user_data.clear()
         await q.message.delete()
+        await q.message.reply_text("❌ Cancelled")
         return
 
     if q.data == "toggle_footer":
-        data["footer"]["enabled"] = not data["footer"]["enabled"]
-        save_data()
+        footer_enabled = not footer_enabled
         await q.edit_message_reply_markup(reply_markup=preview_buttons(uid))
         return
 
-    if q.data == "add_btn":
-        d["add_btn"] = True
-        await q.message.reply_text("Send button name")
-        return
-
-    # SEND
     if q.data == "vanced":
-        targets = data["groups"]["vanced"]
+        targets = channel_groups["vanced"]
     elif q.data == "crunchy":
-        targets = data["groups"]["crunchy"]
+        targets = channel_groups["crunchy"]
     else:
-        targets = data["groups"]["vanced"] + data["groups"]["crunchy"]
+        targets = channel_groups["vanced"] + channel_groups["crunchy"]
 
     for cid in targets:
-        await context.bot.send_message(
-            chat_id=cid,
-            text=build_template(d["text"]),
-            reply_markup=post_buttons(d["buttons"])
-        )
+        await send(context, cid, data)
 
     pending_messages.pop(uid, None)
     await q.message.delete()
 
 # ===== RUN =====
-async def run_bot():
+def run():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("panel", panel_cmd))
+    app.add_handler(CommandHandler("panel", panel))
+
     app.add_handler(MessageHandler(filters.TEXT, handle_message))
     app.add_handler(CallbackQueryHandler(callback))
 
-    await app.initialize()
-    await app.bot.delete_webhook(drop_pending_updates=True)
-    await app.start()
-    await app.updater.start_polling()
-    await app.idle()
+    app.run_polling()
 
 # ===== MAIN =====
 if __name__ == "__main__":
-    asyncio.run(run_bot())
+    threading.Thread(target=run_web).start()
+    threading.Thread(target=ping, daemon=True).start()
+    run()
