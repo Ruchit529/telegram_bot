@@ -64,6 +64,7 @@ def preview_buttons(user_id):
     silent = silent_mode.get(user_id, False)
 
     return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✏ Edit Caption", callback_data="edit_caption")],
         [InlineKeyboardButton("🔕 Silent ON" if silent else "🔔 Silent OFF", callback_data="toggle")],
         [InlineKeyboardButton("📺 Footer ON" if footer_enabled else "📺 Footer OFF", callback_data="toggle_footer")],
         [InlineKeyboardButton("➕ Add Button", callback_data="add_btn")],
@@ -128,6 +129,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     text = update.message.text or ""
+
+    # ===== EDIT CAPTION =====
+    if context.user_data.get("edit_caption"):
+        if uid in pending_messages:
+            pending_messages[uid]["text"] = text
+
+            await update.message.reply_text(
+                build_template(text),
+                reply_markup=preview_buttons(uid)
+            )
+        else:
+            await update.message.reply_text("❌ No post to edit")
+
+        context.user_data.pop("edit_caption")
+        return
 
     # ===== POST CHANNEL ADD =====
     if context.user_data.get("add_post"):
@@ -203,6 +219,12 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     uid = q.from_user.id
 
+    # ===== EDIT BUTTON =====
+    if q.data == "edit_caption":
+        context.user_data["edit_caption"] = True
+        await q.message.reply_text("✏ Send new caption")
+        return
+
     # PANEL NAV
     if q.data == "p_post":
         await q.edit_message_text("📡 Post Channels", reply_markup=panel_post()); return
@@ -213,40 +235,13 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if q.data == "p_close":
         await q.message.delete(); return
 
-    # POST CHANNEL
-    if q.data == "add_v":
-        context.user_data["add_post"] = "vanced"
-        await q.message.reply_text("Send channel ID"); return
-    if q.data == "add_c":
-        context.user_data["add_post"] = "crunchy"
-        await q.message.reply_text("Send channel ID"); return
-    if q.data == "remove_v":
-        context.user_data["remove_post"] = "vanced"
-        await q.message.reply_text("Send ID to remove"); return
-    if q.data == "remove_c":
-        context.user_data["remove_post"] = "crunchy"
-        await q.message.reply_text("Send ID to remove"); return
-    if q.data == "show_p":
-        text = ""
-        for g, ids in channel_groups.items():
-            text += f"{g}:\n" + ("\n".join(ids) or "none") + "\n\n"
-        await q.message.reply_text(text); return
+    # FOOTER TOGGLE
+    if q.data == "toggle_footer":
+        footer_enabled = not footer_enabled
+        await q.edit_message_reply_markup(reply_markup=preview_buttons(uid))
+        return
 
-    # FOOTER
-    if q.data == "set_footer_title":
-        context.user_data["set_footer_title"] = True
-        await q.message.reply_text("Send new title"); return
-    if q.data == "add_footer":
-        context.user_data["add_footer"] = True
-        await q.message.reply_text("Send @channel"); return
-    if q.data == "remove_footer":
-        context.user_data["remove_footer"] = True
-        await q.message.reply_text("Send channel to remove"); return
-    if q.data == "show_footer":
-        text = footer_title + "\n\n" + ("\n".join(footer_channels) or "none")
-        await q.message.reply_text(text); return
-
-    # NORMAL FLOW
+    # ===== SEND =====
     if uid not in pending_messages:
         return
 
@@ -257,11 +252,6 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.clear()
         await q.message.delete()
         await q.message.reply_text("❌ Cancelled")
-        return
-
-    if q.data == "toggle_footer":
-        footer_enabled = not footer_enabled
-        await q.edit_message_reply_markup(reply_markup=preview_buttons(uid))
         return
 
     if q.data == "vanced":
