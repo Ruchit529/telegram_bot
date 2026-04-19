@@ -155,7 +155,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ===== POST CHANNEL ADD =====
     if context.user_data.get("add_post"):
         group = context.user_data.pop("add_post")
-
         if text.startswith("-100"):
             if text not in channel_groups[group]:
                 channel_groups[group].append(text)
@@ -164,8 +163,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("⚠️ Already added")
         else:
             await update.message.reply_text("❌ Invalid channel ID")
-
-    return
+        return
 
     # ===== POST CHANNEL REMOVE =====
     if context.user_data.get("remove_post"):
@@ -206,10 +204,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"❌ Removed from {group}")
         else:
             await update.message.reply_text("Not found")
-    return
-
-    # ===== NEW POST =====
-
+        return
+        
+# ===== NEW POST =====
 msg = update.message
 
 pending_messages[uid] = {
@@ -226,6 +223,7 @@ if msg.photo:
 elif msg.video:
     pending_messages[uid]["type"] = "video"
     pending_messages[uid]["file_id"] = msg.video.file_id
+
 
 await update.message.reply_text(
     build_template(text, "vanced"),
