@@ -16,15 +16,11 @@ from telegram.ext import (
 from deep_translator import GoogleTranslator
 from telegram.error import TelegramError
 
-
 # ===== CONFIG =====
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 CHANNEL_1 = "-1003052492544"
 CHANNEL_2 = "-1003238213356"
-
-VANCED_GROUP = "https://t.me/steam_games_chatt"
-CRUNCHY_GROUP = "https://t.me/Crunchyroll_Anime_Chatt"
 
 ALLOWED_USERS = {7173549132, 7050803817}
 
@@ -37,6 +33,12 @@ pending_messages = {}
 # toggles
 silent_mode = {}
 button_mode = {}
+
+# dynamic channels
+channel_links = [
+    "@free_crunchyroll_account_4u",
+    "@Crunchyroll_Anime_Chatt"
+]
 
 MESSAGE_TIMEOUT = 600
 
@@ -60,7 +62,6 @@ session = requests.Session()
 def ping_self():
     if not SELF_URL:
         return
-
     while True:
         try:
             session.get(SELF_URL, timeout=10)
@@ -72,30 +73,34 @@ def ping_self():
 # ===== CLEANUP =====
 def cleanup_pending():
     now = time.time()
-
     expired = [
         uid for uid, data in pending_messages.items()
         if now - data["time"] > MESSAGE_TIMEOUT
     ]
-
     for uid in expired:
         pending_messages.pop(uid, None)
 
 
-# ===== TEMPLATE (ORIGINAL) =====
-def build_template(text, link):
-    return f"👇👇👇\n\n{text or ''}\n\n👉 [JOIN GROUP]({link})"
+# ===== TEMPLATE =====
+def build_template(text):
+    result = f"👇👇👇\n\n{text or ''}\n\n"
+
+    if channel_links:
+        result += "Join Backup Channel 👇\n\n"
+        for ch in channel_links:
+            result += f"👉 {ch}\n"
+
+    return result.strip()
 
 
-# ===== POST BUTTON =====
-def post_button(name, link):
-
-    if not link:
+# ===== BUTTON MARKUP =====
+def post_button(buttons):
+    if not buttons:
         return None
 
-    keyboard = [
-        [InlineKeyboardButton(name, url=link)]
-    ]
+    keyboard = []
+    for btn in buttons:
+        keyboard.append([InlineKeyboardButton(btn["name"], url=btn["link"])])
 
     return InlineKeyboardMarkup(keyboard)
 
@@ -104,14 +109,12 @@ def post_button(name, link):
 def buttons(user_id):
 
     silent = silent_mode.get(user_id, False)
-    button = button_mode.get(user_id, False)
 
     notify_text = "🔕 Silent Mode ON" if silent else "🔔 Silent Mode OFF"
-    button_text = "🔘 Button Mode ON" if button else "⚪ Button Mode OFF"
 
     keyboard = [
         [InlineKeyboardButton(notify_text, callback_data="toggle_notify")],
-        [InlineKeyboardButton(button_text, callback_data="toggle_button")],
+        [InlineKeyboardButton("➕ Add Button", callback_data="add_button")],
         [InlineKeyboardButton("✏ Edit Caption", callback_data="edit")],
         [
             InlineKeyboardButton("🎮 Vanced Games", callback_data="vanced"),
@@ -126,10 +129,8 @@ def buttons(user_id):
 
 # ===== TRANSLATION =====
 async def translate_text(text):
-
     if not text:
         return ""
-
     try:
         return await asyncio.to_thread(translator.translate, text)
     except:
@@ -140,13 +141,10 @@ async def translate_text(text):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_id = update.message.from_user.id
-
-    if ALLOWED_USERS and user_id not in ALLOWED_USERS:
+    if user_id not in ALLOWED_USERS:
         return
 
-    await update.message.reply_text(
-        "Send text/photo/video to create a post."
-    )
+    await update.message.reply_text("Send text/photo/video to create post.")
 
 
 # ===== HANDLE MESSAGE =====
@@ -155,34 +153,37 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cleanup_pending()
 
     user_id = update.message.from_user.id
-
-    if ALLOWED_USERS and user_id not in ALLOWED_USERS:
+    if user_id not in ALLOWED_USERS:
         return
 
-
-    # ===== BUTTON NAME INPUT =====
+    # ===== BUTTON CREATION FLOW =====
     if user_id in pending_messages:
 
         data = pending_messages[user_id]
 
-        if button_mode.get(user_id, False) and data.get("button_name") is None:
+        if data.get("adding_button"):
 
-            data["button_name"] = update.message.text
+            if data.get("step") == "name":
+                data["temp_name"] = update.message.text
+                data["step"] = "link"
 
-            await update.message.reply_text("Now send button link.")
-            return
+                await update.message.reply_text("Now send button link.")
+                return
 
+            elif data.get("step") == "link":
+                data["buttons"].append({
+                    "name": data["temp_name"],
+                    "link": update.message.text
+                })
 
-        if button_mode.get(user_id, False) and data.get("button_link") is None:
+                data["adding_button"] = False
+                data["step"] = None
 
-            data["button_link"] = update.message.text
-
-            await update.message.reply_text(
-                "Button saved. Choose channel.",
-                reply_markup=buttons(user_id)
-            )
-            return
-
+                await update.message.reply_text(
+                    "✅ Button added! Click 'Add Button' again for more.",
+                    reply_markup=buttons(user_id)
+                )
+                return
 
     # ===== EDIT MODE =====
     if context.user_data.get("editing"):
@@ -190,12 +191,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         translated = await translate_text(update.message.text)
 
         if user_id in pending_messages:
-
             pending_messages[user_id]["text"] = translated
 
             await update.message.reply_text(
-                build_template(translated, VANCED_GROUP),
-                parse_mode="Markdown",
+                build_template(translated),
                 reply_markup=buttons(user_id)
             )
 
@@ -212,8 +211,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = {
         "text": translated,
         "time": time.time(),
-        "button_name": None,
-        "button_link": None
+        "buttons": [],
+        "adding_button": False,
+        "step": None
     }
 
     if photo:
@@ -222,8 +222,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await update.message.reply_photo(
             photo=data["file_id"],
-            caption=build_template(translated, VANCED_GROUP),
-            parse_mode="Markdown",
+            caption=build_template(translated),
             reply_markup=buttons(user_id)
         )
 
@@ -233,8 +232,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await update.message.reply_video(
             video=data["file_id"],
-            caption=build_template(translated, VANCED_GROUP),
-            parse_mode="Markdown",
+            caption=build_template(translated),
             reply_markup=buttons(user_id)
         )
 
@@ -243,55 +241,43 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data.update(type="text")
 
         await update.message.reply_text(
-            build_template(translated, VANCED_GROUP),
-            parse_mode="Markdown",
+            build_template(translated),
             reply_markup=buttons(user_id)
         )
 
     pending_messages[user_id] = data
 
-    if button_mode.get(user_id, False):
-        await update.message.reply_text("Send button name.")
-
 
 # ===== SEND POST =====
 async def send_post(context, cid, data, silent):
 
-    group_link = VANCED_GROUP if cid == CHANNEL_1 else CRUNCHY_GROUP
-
-    markup = post_button(data["button_name"], data["button_link"])
+    markup = post_button(data.get("buttons"))
 
     try:
 
         if data["type"] == "text":
-
             await context.bot.send_message(
                 chat_id=cid,
-                text=build_template(data["text"], group_link),
-                parse_mode="Markdown",
+                text=build_template(data["text"]),
                 disable_web_page_preview=True,
                 disable_notification=silent,
                 reply_markup=markup
             )
 
         elif data["type"] == "photo":
-
             await context.bot.send_photo(
                 chat_id=cid,
                 photo=data["file_id"],
-                caption=build_template(data["text"], group_link),
-                parse_mode="Markdown",
+                caption=build_template(data["text"]),
                 disable_notification=silent,
                 reply_markup=markup
             )
 
         else:
-
             await context.bot.send_video(
                 chat_id=cid,
                 video=data["file_id"],
-                caption=build_template(data["text"], group_link),
-                parse_mode="Markdown",
+                caption=build_template(data["text"]),
                 disable_notification=silent,
                 reply_markup=markup
             )
@@ -312,55 +298,35 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.delete()
         return
 
-
-    if query.data == "toggle_notify":
-
-        silent_mode[user_id] = not silent_mode.get(user_id, False)
-
-        await query.edit_message_reply_markup(
-            reply_markup=buttons(user_id)
-        )
-        return
-
-
-    if query.data == "toggle_button":
-
-        button_mode[user_id] = not button_mode.get(user_id, False)
-
-        await query.edit_message_reply_markup(
-            reply_markup=buttons(user_id)
-        )
-        return
-
-
     data = pending_messages[user_id]
 
+    if query.data == "toggle_notify":
+        silent_mode[user_id] = not silent_mode.get(user_id, False)
+        await query.edit_message_reply_markup(reply_markup=buttons(user_id))
+        return
+
+    if query.data == "add_button":
+        data["adding_button"] = True
+        data["step"] = "name"
+        await query.message.reply_text("Send button name.")
+        return
 
     if query.data == "edit":
-
         context.user_data["editing"] = True
         await query.message.reply_text("Send new caption.")
         return
 
-
     if query.data == "cancel":
-
         pending_messages.pop(user_id, None)
         await query.message.delete()
         return
 
-
-    channels = []
-
     if query.data == "vanced":
         channels = [CHANNEL_1]
-
     elif query.data == "crunchy":
         channels = [CHANNEL_2]
-
     else:
         channels = [CHANNEL_1, CHANNEL_2]
-
 
     silent = silent_mode.get(user_id, False)
 
@@ -368,7 +334,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send_post(context, cid, data, silent)
 
     pending_messages.pop(user_id, None)
-
     await query.message.delete()
 
 
@@ -386,7 +351,6 @@ def run_bot():
     app.add_handler(CallbackQueryHandler(button_handler))
 
     print("Bot running...")
-
     app.run_polling()
 
 
