@@ -106,14 +106,17 @@ def panel_post():
 def panel_footer():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("✏ Set Title", callback_data="set_footer_title")],
+
         [
-    InlineKeyboardButton("➕ Add Vanced", callback_data="add_footer_v"),
-    InlineKeyboardButton("➕ Add Crunchy", callback_data="add_footer_c"),
-],
-[
-    InlineKeyboardButton("➖ Remove Vanced", callback_data="remove_footer_v"),
-    InlineKeyboardButton("➖ Remove Crunchy", callback_data="remove_footer_c"),
-],
+            InlineKeyboardButton("➕ Add Vanced", callback_data="add_footer_v"),
+            InlineKeyboardButton("➕ Add Crunchy", callback_data="add_footer_c"),
+        ],
+
+        [
+            InlineKeyboardButton("➖ Remove Vanced", callback_data="remove_footer_v"),
+            InlineKeyboardButton("➖ Remove Crunchy", callback_data="remove_footer_c"),
+        ],
+
         [InlineKeyboardButton("📋 Show Footer", callback_data="show_footer")],
         [InlineKeyboardButton("🔙 Back", callback_data="p_back")]
     ])
@@ -146,8 +149,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if text not in footer_channels[group]:
                 footer_channels[group].append(text)
             await update.message.reply_text(f"✅ Added to {group}")
-    else:
-        await update.message.reply_text("❌ Must be @channel")
+        else:
+            await update.message.reply_text("❌ Must be @channel")
 
     return
 
@@ -188,8 +191,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if text in footer_channels[group]:
             footer_channels[group].remove(text)
             await update.message.reply_text(f"❌ Removed from {group}")
-    else:
-        await update.message.reply_text("Not found")
+        else:
+            await update.message.reply_text("Not found")
     return
 
     # ===== NEW POST =====
@@ -226,6 +229,22 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text("⚙️ Admin Panel", reply_markup=panel_menu()); return
     if q.data == "p_close":
         await q.message.delete(); return
+        # FOOTER ACTIONS
+    if q.data == "add_footer_v":
+        context.user_data["add_footer"] = "vanced"
+        await q.message.reply_text("Send @channel for Vanced"); return
+    
+    if q.data == "add_footer_c":
+        context.user_data["add_footer"] = "crunchy"
+        await q.message.reply_text("Send @channel for Crunchy"); return
+    
+    if q.data == "remove_footer_v":
+        context.user_data["remove_footer"] = "vanced"
+        await q.message.reply_text("Send channel to remove"); return
+    
+    if q.data == "remove_footer_c":
+        context.user_data["remove_footer"] = "crunchy"
+        await q.message.reply_text("Send channel to remove"); return
 
     # POST CHANNEL
     if q.data == "add_v":
