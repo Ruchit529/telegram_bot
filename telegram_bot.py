@@ -25,19 +25,22 @@ pending_messages = {}
 # ===== DATA =====
 channel_groups = {"vanced": [], "crunchy": []}
 
+footer_enabled = True
+
 footers = {
-    "vanced": {"enabled": True, "title": "Join Vanced 👇", "channels": []},
-    "crunchy": {"enabled": True, "title": "Join Crunchy 👇", "channels": []},
+    "vanced": {"title": "Join Vanced 👇", "channels": []},
+    "crunchy": {"title": "Join Crunchy 👇", "channels": []},
 }
 
 # ===== LOAD / SAVE =====
 def load_data():
-    global channel_groups, footers
+    global channel_groups, footers, footer_enabled
     try:
         with open(DATA_FILE, "r") as f:
             data = json.load(f)
             channel_groups = data.get("groups", channel_groups)
             footers.update(data.get("footers", {}))
+            footer_enabled = data.get("footer_enabled", True)
     except:
         save_data()
 
@@ -45,18 +48,20 @@ def save_data():
     with open(DATA_FILE, "w") as f:
         json.dump({
             "groups": channel_groups,
-            "footers": footers
+            "footers": footers,
+            "footer_enabled": footer_enabled
         }, f, indent=4)
 
 # ===== TEMPLATE =====
 def build_template(text, group):
     msg = f"👇👇👇\n\n{text}\n\n"
 
-    f = footers[group]
-    if f["enabled"] and f["channels"]:
-        msg += f"{f['title']}\n\n"
-        for ch in f["channels"]:
-            msg += f"👉 {ch}\n"
+    if footer_enabled:
+        f = footers[group]
+        if f["channels"]:
+            msg += f"{f['title']}\n\n"
+            for ch in f["channels"]:
+                msg += f"👉 {ch}\n"
 
     return msg.strip()
 
@@ -83,6 +88,10 @@ def ping():
 def preview_buttons():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("✏ Edit Caption", callback_data="edit")],
+        [InlineKeyboardButton(
+            "📺 Footer ON" if footer_enabled else "📺 Footer OFF",
+            callback_data="toggle_footer"
+        )],
         [
             InlineKeyboardButton("🎮 Vanced", callback_data="send_vanced"),
             InlineKeyboardButton("🍿 Crunchy", callback_data="send_crunchy"),
@@ -102,15 +111,16 @@ async def panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📺 Vanced Footer", callback_data="panel_vanced")],
-        [InlineKeyboardButton("🍿 Crunchy Footer", callback_data="panel_crunchy")],
+        [InlineKeyboardButton("🎮 Vanced Channels", callback_data="panel_post_vanced")],
+        [InlineKeyboardButton("🍿 Crunchy Channels", callback_data="panel_post_crunchy")],
+        [InlineKeyboardButton("📺 Vanced Footer", callback_data="panel_footer_vanced")],
+        [InlineKeyboardButton("🍿 Crunchy Footer", callback_data="panel_footer_crunchy")],
     ])
 
-    await update.message.reply_text("⚙ Panel", reply_markup=keyboard)
+    await update.message.reply_text("⚙ Control Panel", reply_markup=keyboard)
 
 # ===== MESSAGE =====
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     uid = update.effective_user.id
     if uid not in ALLOWED_USERS:
         return
@@ -119,20 +129,45 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = msg.text or msg.caption or ""
 
     # ===== PANEL INPUT =====
-    if context.user_data.get("edit_title"):
-        group = context.user_data["edit_title"]
-        footers[group]["title"] = text
+    if context.user_data.get("add_post"):
+        group = context.user_data.pop("add_post")
+        channel_groups[group].append(text)
         save_data()
-        context.user_data.pop("edit_title")
-        await msg.reply_text("✅ Title updated")
+        await msg.reply_text("✅ Channel added")
         return
 
-    if context.user_data.get("edit_channels"):
-        group = context.user_data["edit_channels"]
-        footers[group]["channels"] = text.split("\n")
+    if context.user_data.get("remove_post"):
+        group = context.user_data.pop("remove_post")
+        if text in channel_groups[group]:
+            channel_groups[group].remove(text)
+            save_data()
+            await msg.reply_text("✅ Channel removed")
+        else:
+            await msg.reply_text("❌ Not found")
+        return
+
+    if context.user_data.get("add_footer"):
+        group = context.user_data.pop("add_footer")
+        footers[group]["channels"].append(text)
         save_data()
-        context.user_data.pop("edit_channels")
-        await msg.reply_text("✅ Channels updated")
+        await msg.reply_text("✅ Footer channel added")
+        return
+
+    if context.user_data.get("remove_footer"):
+        group = context.user_data.pop("remove_footer")
+        if text in footers[group]["channels"]:
+            footers[group]["channels"].remove(text)
+            save_data()
+            await msg.reply_text("✅ Footer channel removed")
+        else:
+            await msg.reply_text("❌ Not found")
+        return
+
+    if context.user_data.get("edit_title"):
+        group = context.user_data.pop("edit_title")
+        footers[group]["title"] = text
+        save_data()
+        await msg.reply_text("✅ Title updated")
         return
 
     # ===== NEW POST =====
@@ -172,6 +207,7 @@ async def send(context, cid, data, group):
 
 # ===== CALLBACK =====
 async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global footer_enabled
 
     q = update.callback_query
     await q.answer()
@@ -180,37 +216,73 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if uid not in ALLOWED_USERS:
         return
 
-    # ===== PANEL OPEN =====
-    if q.data.startswith("panel_"):
-        group = q.data.split("_")[1]
+    # ===== FOOTER TOGGLE =====
+    if q.data == "toggle_footer":
+        footer_enabled = not footer_enabled
+        save_data()
+        await q.edit_message_reply_markup(reply_markup=preview_buttons())
+        return
+
+    # ===== PANEL POST =====
+    if q.data.startswith("panel_post_"):
+        group = q.data.split("_")[2]
 
         keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📺 Toggle", callback_data=f"toggle_{group}")],
+            [InlineKeyboardButton("➕ Add", callback_data=f"add_post_{group}")],
+            [InlineKeyboardButton("➖ Remove", callback_data=f"remove_post_{group}")],
+            [InlineKeyboardButton("📋 List", callback_data=f"list_post_{group}")],
+        ])
+
+        await q.message.reply_text(f"{group.upper()} Channels", reply_markup=keyboard)
+        return
+
+    if q.data.startswith("add_post_"):
+        context.user_data["add_post"] = q.data.split("_")[2]
+        await q.message.reply_text("Send channel ID")
+        return
+
+    if q.data.startswith("remove_post_"):
+        context.user_data["remove_post"] = q.data.split("_")[2]
+        await q.message.reply_text("Send channel ID to remove")
+        return
+
+    if q.data.startswith("list_post_"):
+        group = q.data.split("_")[2]
+        await q.message.reply_text("\n".join(channel_groups[group]) or "No channels")
+        return
+
+    # ===== PANEL FOOTER =====
+    if q.data.startswith("panel_footer_"):
+        group = q.data.split("_")[2]
+
+        keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("✏ Title", callback_data=f"title_{group}")],
-            [InlineKeyboardButton("📢 Channels", callback_data=f"channels_{group}")],
+            [InlineKeyboardButton("➕ Add", callback_data=f"add_footer_{group}")],
+            [InlineKeyboardButton("➖ Remove", callback_data=f"remove_footer_{group}")],
+            [InlineKeyboardButton("📋 List", callback_data=f"list_footer_{group}")],
         ])
 
         await q.message.reply_text(f"{group.upper()} Footer", reply_markup=keyboard)
         return
 
-    # ===== PANEL ACTION =====
-    if q.data.startswith("toggle_"):
-        group = q.data.split("_")[1]
-        footers[group]["enabled"] = not footers[group]["enabled"]
-        save_data()
-        await q.message.reply_text("✅ Toggled")
-        return
-
     if q.data.startswith("title_"):
-        group = q.data.split("_")[1]
-        context.user_data["edit_title"] = group
+        context.user_data["edit_title"] = q.data.split("_")[1]
         await q.message.reply_text("Send new title")
         return
 
-    if q.data.startswith("channels_"):
-        group = q.data.split("_")[1]
-        context.user_data["edit_channels"] = group
-        await q.message.reply_text("Send channels (one per line)")
+    if q.data.startswith("add_footer_"):
+        context.user_data["add_footer"] = q.data.split("_")[2]
+        await q.message.reply_text("Send channel")
+        return
+
+    if q.data.startswith("remove_footer_"):
+        context.user_data["remove_footer"] = q.data.split("_")[2]
+        await q.message.reply_text("Send channel to remove")
+        return
+
+    if q.data.startswith("list_footer_"):
+        group = q.data.split("_")[2]
+        await q.message.reply_text("\n".join(footers[group]["channels"]) or "No footer channels")
         return
 
     # ===== SEND =====
