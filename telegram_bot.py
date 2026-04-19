@@ -139,15 +139,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text or ""
 
     # ===== POST CHANNEL ADD =====
-    if context.user_data.get("add_post"):
-        group = context.user_data.pop("add_post")
-        if text.startswith("-100"):
-            if text not in channel_groups[group]:
-                channel_groups[group].append(text)
-            await update.message.reply_text(f"✅ Added to {group}")
-        else:
-            await update.message.reply_text("❌ Invalid ID")
-        return
+    if context.user_data.get("add_footer"):
+    group = context.user_data.pop("add_footer")
+
+    if text.startswith("@"):
+        if text not in footer_channels[group]:
+            footer_channels[group].append(text)
+        await update.message.reply_text(f"✅ Added to {group}")
+    else:
+        await update.message.reply_text("❌ Must be @channel")
+
+    return
 
     # ===== POST CHANNEL REMOVE =====
     if context.user_data.get("remove_post"):
