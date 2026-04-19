@@ -70,6 +70,7 @@ def preview_buttons(user_id):
         [InlineKeyboardButton("🔕 Silent ON" if silent else "🔔 Silent OFF", callback_data="toggle")],
         [InlineKeyboardButton("📺 Footer ON" if footer_enabled else "📺 Footer OFF", callback_data="toggle_footer")],
         [InlineKeyboardButton("➕ Add Button", callback_data="add_btn")],
+        [InlineKeyboardButton("✏️ Edit Caption", callback_data="edit_caption")],
         [
             InlineKeyboardButton("🎮 Vanced Games", callback_data="vanced"),
             InlineKeyboardButton("🍿 Crunchyroll Anime", callback_data="crunchy"),
@@ -139,7 +140,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if uid not in ALLOWED_USERS:
         return
 
-    text = update.message.text or ""
+    text = update.message.text or update.message.caption or ""
+    
+    if context.user_data.get("edit_caption"):
+    pending_messages[uid]["text"] = text
+    context.user_data.pop("edit_caption")
+
+    await update.message.reply_text(
+        build_template(text, "vanced"),
+        reply_markup=preview_buttons(uid)
+    )
+    return
 
     # ===== POST CHANNEL ADD =====
     if context.user_data.get("add_post"):
@@ -198,20 +209,56 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return
 
     # ===== NEW POST =====
-    pending_messages[uid] = {"text": text, "buttons": []}
+ msg = update.message
 
-    await update.message.reply_text(
-        build_template(text, "vanced"),
-        reply_markup=preview_buttons(uid)
-    )
+pending_messages[uid] = {
+    "text": text,
+    "buttons": [],
+    "type": "text",
+    "file_id": None
+}
+
+if msg.photo:
+    pending_messages[uid]["type"] = "photo"
+    pending_messages[uid]["file_id"] = msg.photo[-1].file_id
+
+elif msg.video:
+    pending_messages[uid]["type"] = "video"
+    pending_messages[uid]["file_id"] = msg.video.file_id
+
+
+await update.message.reply_text(
+    build_template(text, "vanced"),
+    reply_markup=preview_buttons(uid)
+)
 
 # ===== SEND =====
 async def send(context, cid, data, group):
-    await context.bot.send_message(
-        chat_id=cid,
-        text=build_template(data["text"], group),
-        reply_markup=build_post_buttons(data["buttons"])
-    )
+    caption = build_template(data["text"], group)
+    buttons = build_post_buttons(data["buttons"])
+
+    if data["type"] == "photo":
+        await context.bot.send_photo(
+            chat_id=cid,
+            photo=data["file_id"],
+            caption=caption,
+            reply_markup=buttons
+        )
+
+    elif data["type"] == "video":
+        await context.bot.send_video(
+            chat_id=cid,
+            video=data["file_id"],
+            caption=caption,
+            reply_markup=buttons
+        )
+
+    else:
+        await context.bot.send_message(
+            chat_id=cid,
+            text=caption,
+            reply_markup=buttons
+        )
 
 # ===== CALLBACK =====
 async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -223,6 +270,10 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = q.from_user.id
 
     # PANEL NAV
+    if q.data == "edit_caption":
+        context.user_data["edit_caption"] = True
+        await q.message.reply_text("Send new caption")
+        return
     if q.data == "p_post":
         await q.edit_message_text("📡 Post Channels", reply_markup=panel_post()); return
     if q.data == "p_footer":
