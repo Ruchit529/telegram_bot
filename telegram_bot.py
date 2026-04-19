@@ -1,4 +1,5 @@
 import os
+import json
 import threading
 import time
 import requests
@@ -18,12 +19,47 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 ALLOWED_USERS = {7173549132, 7050803817}
 SELF_URL = os.getenv("SELF_URL", "")
 
-pending_messages = {}
-channel_groups = {"vanced": [], "crunchy": []}
+DATA_FILE = "data.json"
 
+pending_messages = {}
+
+channel_groups = {"vanced": [], "crunchy": []}
 footer_enabled = True
 footer_title = "Join Backup Channel 👇"
 footer_channels = []
+
+# ===== LOAD / SAVE =====
+def load_data():
+    global channel_groups, footer_title, footer_channels, footer_enabled
+
+    try:
+        with open(DATA_FILE, "r") as f:
+            data = json.load(f)
+
+            # GROUPS
+            channel_groups = data.get("groups", {"vanced": [], "crunchy": []})
+
+            # FOOTER
+            footer = data.get("footer", {})
+            footer_enabled = footer.get("enabled", True)
+            footer_title = footer.get("title", "Join Backup Channel 👇")
+            footer_channels = footer.get("channels", [])
+
+    except FileNotFoundError:
+        save_data()
+
+def save_data():
+    data = {
+        "groups": channel_groups,
+        "footer": {
+            "enabled": footer_enabled,
+            "title": footer_title,
+            "channels": footer_channels
+        }
+    }
+
+    with open(DATA_FILE, "w") as f:
+        json.dump(data, f, indent=4, ensure_ascii=False)
 
 # ===== WEB =====
 app_web = Flask(__name__)
@@ -75,7 +111,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await update.message.reply_text("Send or forward post")
 
-# ===== MESSAGE HANDLER =====
+# ===== MESSAGE =====
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     uid = update.effective_user.id
@@ -161,7 +197,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode=None
         )
 
-# ===== SEND FUNCTION =====
+# ===== SEND =====
 async def send(context, cid, data):
 
     if data["media"] == "photo":
@@ -203,6 +239,7 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if q.data == "toggle_footer":
         footer_enabled = not footer_enabled
+        save_data()
         await q.edit_message_reply_markup(reply_markup=preview_buttons(uid))
         return
 
@@ -231,6 +268,8 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ===== RUN =====
 def run():
+    load_data()
+
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
