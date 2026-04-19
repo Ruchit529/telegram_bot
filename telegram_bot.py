@@ -295,11 +295,9 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for cid in channel_groups["crunchy"]:
             await send(context, cid, data, "crunchy")
     
-        for cid in targets:
-            await send(context, cid, data)
-    
         pending_messages.pop(uid, None)
         await q.message.delete()
+        return
 
 # ===== RUN =====
 def run():
