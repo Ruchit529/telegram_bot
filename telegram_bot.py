@@ -1,5 +1,7 @@
 import os
 import json
+import asyncio
+import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
@@ -9,6 +11,9 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
+
+# ===== LOGGING =====
+logging.basicConfig(level=logging.INFO)
 
 # ===== CONFIG =====
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -36,27 +41,25 @@ def save_data():
 data = load_data()
 
 pending_messages = {}
-silent_mode = {}
 
 # ===== TEMPLATE =====
 def build_template(text):
     msg = f"👇👇👇\n\n{text}\n\n"
+    f = data["footer"]
 
-    footer = data["footer"]
-    if footer["enabled"] and footer["channels"]:
-        msg += f"{footer['title']}\n\n"
-        for ch in footer["channels"]:
+    if f["enabled"] and f["channels"]:
+        msg += f"{f['title']}\n\n"
+        for ch in f["channels"]:
             msg += f"👉 {ch}\n"
 
     return msg.strip()
 
 # ===== BUTTONS =====
 def preview_buttons(uid):
-    footer = data["footer"]["enabled"]
+    f = data["footer"]["enabled"]
 
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔔 Toggle Silent", callback_data="toggle")],
-        [InlineKeyboardButton("📺 Footer ON" if footer else "📺 Footer OFF", callback_data="toggle_footer")],
+        [InlineKeyboardButton("📺 Footer ON" if f else "📺 Footer OFF", callback_data="toggle_footer")],
         [InlineKeyboardButton("➕ Add Button", callback_data="add_btn")],
         [
             InlineKeyboardButton("🎮 Vanced", callback_data="vanced"),
@@ -267,21 +270,18 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     d = pending_messages[uid]
 
-    # CANCEL
     if q.data == "cancel":
         pending_messages.pop(uid, None)
         context.user_data.clear()
         await q.message.delete()
         return
 
-    # TOGGLE FOOTER
     if q.data == "toggle_footer":
         data["footer"]["enabled"] = not data["footer"]["enabled"]
         save_data()
         await q.edit_message_reply_markup(reply_markup=preview_buttons(uid))
         return
 
-    # ADD BUTTON
     if q.data == "add_btn":
         d["add_btn"] = True
         await q.message.reply_text("Send button name")
@@ -306,18 +306,26 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.message.delete()
 
 # ===== RUN =====
-def run():
+async def run_bot():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("panel", panel_cmd))
-
     app.add_handler(MessageHandler(filters.TEXT, handle_message))
     app.add_handler(CallbackQueryHandler(callback))
 
     print("Bot running...")
-    app.run_polling(drop_pending_updates=True)
+
+    await app.initialize()
+
+    # 🔥 CRITICAL FIX
+    await app.bot.delete_webhook(drop_pending_updates=True)
+
+    await app.start()
+    await app.updater.start_polling()
+
+    await app.idle()
 
 # ===== MAIN =====
 if __name__ == "__main__":
-    run()
+    asyncio.run(run_bot())
