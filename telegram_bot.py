@@ -21,7 +21,9 @@ SELF_URL = os.getenv("SELF_URL", "")
 pending_messages = {}
 silent_mode = {}
 
-channel_groups = {"vanced": [], "crunchy": []}
+channel_groups = {"vanced": [-1003052492544],
+    "crunchy": [-1003238213356
+,-1003943431178]}
 
 # ===== WEB SERVER =====
 app_web = Flask(__name__)
