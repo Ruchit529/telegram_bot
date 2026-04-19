@@ -151,59 +151,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ===== FOOTER ADD =====
-    if context.user_data.get("add_footer"):
-        group = context.user_data.pop("add_footer")
-
-        if text.startswith("@"):
-            if text not in footer_channels[group]:
-                footer_channels[group].append(text)
-
-            await update.message.reply_text(f"✅ Added to {group}")
-        else:
-            await update.message.reply_text("❌ Must be @channel")
-
-        return
-
-    # ===== FOOTER REMOVE =====
-    if context.user_data.get("remove_footer"):
-        group = context.user_data.pop("remove_footer")
-        if text in footer_channels[group]:
-            footer_channels[group].remove(text)
-            await update.message.reply_text(f"❌ Removed from {group}")
-        else:
-            await update.message.reply_text("Not found")
-        return
-
     # ===== NEW POST =====
-    msg = update.message
-
     pending_messages[uid] = {
         "text": text,
         "buttons": [],
-        "type": "text",
-        "file_id": None
+        "chat_id": update.message.chat_id,
+        "message_id": update.message.message_id
     }
-
-    # ✅ FIXED MEDIA DETECTION (forward + normal)
-    if msg.effective_attachment:
-
-        if isinstance(msg.effective_attachment, list):  # photo
-            pending_messages[uid]["type"] = "photo"
-            pending_messages[uid]["file_id"] = msg.effective_attachment[-1].file_id
-
-        else:
-            att = msg.effective_attachment
-
-            if hasattr(att, "file_id"):
-                pending_messages[uid]["file_id"] = att.file_id
-
-                if msg.video:
-                    pending_messages[uid]["type"] = "video"
-                elif msg.document:
-                    pending_messages[uid]["type"] = "document"
-                else:
-                    pending_messages[uid]["type"] = "photo"
 
     await update.message.reply_text(
         build_template(text, "vanced"),
@@ -215,31 +169,15 @@ async def send(context, cid, data, group):
     caption = build_template(data["text"], group)
     buttons = build_post_buttons(data["buttons"])
 
-    if data["type"] == "photo":
-        await context.bot.send_photo(
+    try:
+        await context.bot.copy_message(
             chat_id=cid,
-            photo=data["file_id"],
+            from_chat_id=data["chat_id"],
+            message_id=data["message_id"],
             caption=caption,
             reply_markup=buttons
         )
-
-    elif data["type"] == "video":
-        await context.bot.send_video(
-            chat_id=cid,
-            video=data["file_id"],
-            caption=caption,
-            reply_markup=buttons
-        )
-
-    elif data["type"] == "document":
-        await context.bot.send_document(
-            chat_id=cid,
-            document=data["file_id"],
-            caption=caption,
-            reply_markup=buttons
-        )
-
-    else:
+    except:
         await context.bot.send_message(
             chat_id=cid,
             text=caption,
@@ -248,8 +186,6 @@ async def send(context, cid, data, group):
 
 # ===== CALLBACK =====
 async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    global footer_enabled
 
     q = update.callback_query
     await q.answer()
