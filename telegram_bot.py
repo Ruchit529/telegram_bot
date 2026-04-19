@@ -19,11 +19,8 @@ ALLOWED_USERS = {7173549132, 7050803817}
 SELF_URL = os.getenv("SELF_URL", "")
 
 pending_messages = {}
-silent_mode = {}
-
 channel_groups = {"vanced": [], "crunchy": []}
 
-# ===== FOOTER SYSTEM =====
 footer_enabled = True
 footer_title = "Join Backup Channel 👇"
 footer_channels = []
@@ -61,154 +58,134 @@ def build_template(text):
 
 # ===== BUTTONS =====
 def preview_buttons(user_id):
-    silent = silent_mode.get(user_id, False)
-
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("✏ Edit Caption", callback_data="edit_caption")],
-        [InlineKeyboardButton("🔕 Silent ON" if silent else "🔔 Silent OFF", callback_data="toggle")],
         [InlineKeyboardButton("📺 Footer ON" if footer_enabled else "📺 Footer OFF", callback_data="toggle_footer")],
-        [InlineKeyboardButton("➕ Add Button", callback_data="add_btn")],
         [
-            InlineKeyboardButton("🎮 Vanced Games", callback_data="vanced"),
-            InlineKeyboardButton("🍿 Crunchyroll Anime", callback_data="crunchy"),
+            InlineKeyboardButton("🎮 Vanced", callback_data="vanced"),
+            InlineKeyboardButton("🍿 Crunchy", callback_data="crunchy"),
         ],
         [InlineKeyboardButton("🚀 Send to Both", callback_data="both")],
         [InlineKeyboardButton("❌ Cancel", callback_data="cancel")]
     ])
 
-def build_post_buttons(btns):
-    if not btns:
-        return None
-    return InlineKeyboardMarkup([[InlineKeyboardButton(b["name"], url=b["link"])] for b in btns])
-
-# ===== PANEL =====
-def panel_menu():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📡 Post Channels", callback_data="p_post")],
-        [InlineKeyboardButton("📺 Footer Settings", callback_data="p_footer")],
-        [InlineKeyboardButton("❌ Close", callback_data="p_close")]
-    ])
-
-def panel_post():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("➕ Add Vanced", callback_data="add_v")],
-        [InlineKeyboardButton("➕ Add Crunchy", callback_data="add_c")],
-        [
-            InlineKeyboardButton("➖ Remove Vanced", callback_data="remove_v"),
-            InlineKeyboardButton("➖ Remove Crunchy", callback_data="remove_c"),
-        ],
-        [InlineKeyboardButton("📋 Show Channels", callback_data="show_p")],
-        [InlineKeyboardButton("🔙 Back", callback_data="p_back")]
-    ])
-
-def panel_footer():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("✏ Set Title", callback_data="set_footer_title")],
-        [InlineKeyboardButton("➕ Add Channel", callback_data="add_footer")],
-        [InlineKeyboardButton("➖ Remove Channel", callback_data="remove_footer")],
-        [InlineKeyboardButton("📋 Show Footer", callback_data="show_footer")],
-        [InlineKeyboardButton("🔙 Back", callback_data="p_back")]
-    ])
-
-# ===== COMMANDS =====
+# ===== COMMAND =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ALLOWED_USERS:
         return
-    await update.message.reply_text("Send post content")
+    await update.message.reply_text("Send or forward post")
 
-async def panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("⚙️ Admin Panel", reply_markup=panel_menu())
-
-# ===== MESSAGE =====
+# ===== MESSAGE HANDLER =====
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    global footer_title
 
     uid = update.effective_user.id
     if uid not in ALLOWED_USERS:
         return
 
-    text = update.message.text or ""
+    msg = update.message
+    text = msg.text or msg.caption or ""
 
     # ===== EDIT CAPTION =====
     if context.user_data.get("edit_caption"):
         if uid in pending_messages:
             pending_messages[uid]["text"] = text
+            data = pending_messages[uid]
 
-            await update.message.reply_text(
-                build_template(text),
-                reply_markup=preview_buttons(uid)
-            )
+            if data["media"] == "photo":
+                await msg.reply_photo(
+                    photo=data["file_id"],
+                    caption=build_template(text),
+                    reply_markup=preview_buttons(uid),
+                    parse_mode=None
+                )
+
+            elif data["media"] == "video":
+                await msg.reply_video(
+                    video=data["file_id"],
+                    caption=build_template(text),
+                    reply_markup=preview_buttons(uid),
+                    parse_mode=None
+                )
+
+            else:
+                await msg.reply_text(
+                    build_template(text),
+                    reply_markup=preview_buttons(uid),
+                    parse_mode=None
+                )
         else:
-            await update.message.reply_text("❌ No post to edit")
+            await msg.reply_text("❌ No post to edit")
 
         context.user_data.pop("edit_caption")
         return
 
-    # ===== POST CHANNEL ADD =====
-    if context.user_data.get("add_post"):
-        group = context.user_data.pop("add_post")
-        if text.startswith("-100"):
-            if text not in channel_groups[group]:
-                channel_groups[group].append(text)
-            await update.message.reply_text(f"✅ Added to {group}")
-        else:
-            await update.message.reply_text("❌ Invalid ID")
-        return
-
-    # ===== POST CHANNEL REMOVE =====
-    if context.user_data.get("remove_post"):
-        group = context.user_data.pop("remove_post")
-        if text in channel_groups[group]:
-            channel_groups[group].remove(text)
-            await update.message.reply_text(f"❌ Removed from {group}")
-        else:
-            await update.message.reply_text("Not found")
-        return
-
-    # ===== FOOTER TITLE =====
-    if context.user_data.get("set_footer_title"):
-        footer_title = text
-        context.user_data.pop("set_footer_title")
-        await update.message.reply_text("✅ Footer title updated")
-        return
-
-    # ===== FOOTER ADD =====
-    if context.user_data.get("add_footer"):
-        if text.startswith("@"):
-            if text not in footer_channels:
-                footer_channels.append(text)
-            await update.message.reply_text("✅ Channel added")
-        else:
-            await update.message.reply_text("❌ Must be @channel")
-        context.user_data.pop("add_footer")
-        return
-
-    # ===== FOOTER REMOVE =====
-    if context.user_data.get("remove_footer"):
-        if text in footer_channels:
-            footer_channels.remove(text)
-            await update.message.reply_text("❌ Removed")
-        else:
-            await update.message.reply_text("Not found")
-        context.user_data.pop("remove_footer")
-        return
-
     # ===== NEW POST =====
-    pending_messages[uid] = {"text": text, "buttons": []}
+    media = None
+    file_id = None
 
-    await update.message.reply_text(
-        build_template(text),
-        reply_markup=preview_buttons(uid)
-    )
+    if msg.photo:
+        media = "photo"
+        file_id = msg.photo[-1].file_id
 
-# ===== SEND =====
+    elif msg.video:
+        media = "video"
+        file_id = msg.video.file_id
+
+    pending_messages[uid] = {
+        "text": text,
+        "media": media,
+        "file_id": file_id
+    }
+
+    # ===== PREVIEW =====
+    if media == "photo":
+        await msg.reply_photo(
+            photo=file_id,
+            caption=build_template(text),
+            reply_markup=preview_buttons(uid),
+            parse_mode=None
+        )
+
+    elif media == "video":
+        await msg.reply_video(
+            video=file_id,
+            caption=build_template(text),
+            reply_markup=preview_buttons(uid),
+            parse_mode=None
+        )
+
+    else:
+        await msg.reply_text(
+            build_template(text),
+            reply_markup=preview_buttons(uid),
+            parse_mode=None
+        )
+
+# ===== SEND FUNCTION =====
 async def send(context, cid, data):
-    await context.bot.send_message(
-        chat_id=cid,
-        text=build_template(data["text"]),
-        reply_markup=build_post_buttons(data["buttons"])
-    )
+
+    if data["media"] == "photo":
+        await context.bot.send_photo(
+            chat_id=cid,
+            photo=data["file_id"],
+            caption=build_template(data["text"]),
+            parse_mode=None
+        )
+
+    elif data["media"] == "video":
+        await context.bot.send_video(
+            chat_id=cid,
+            video=data["file_id"],
+            caption=build_template(data["text"]),
+            parse_mode=None
+        )
+
+    else:
+        await context.bot.send_message(
+            chat_id=cid,
+            text=build_template(data["text"]),
+            parse_mode=None
+        )
 
 # ===== CALLBACK =====
 async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -219,29 +196,16 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     uid = q.from_user.id
 
-    # ===== EDIT BUTTON =====
     if q.data == "edit_caption":
         context.user_data["edit_caption"] = True
         await q.message.reply_text("✏ Send new caption")
         return
 
-    # PANEL NAV
-    if q.data == "p_post":
-        await q.edit_message_text("📡 Post Channels", reply_markup=panel_post()); return
-    if q.data == "p_footer":
-        await q.edit_message_text("📺 Footer Settings", reply_markup=panel_footer()); return
-    if q.data == "p_back":
-        await q.edit_message_text("⚙️ Admin Panel", reply_markup=panel_menu()); return
-    if q.data == "p_close":
-        await q.message.delete(); return
-
-    # FOOTER TOGGLE
     if q.data == "toggle_footer":
         footer_enabled = not footer_enabled
         await q.edit_message_reply_markup(reply_markup=preview_buttons(uid))
         return
 
-    # ===== SEND =====
     if uid not in pending_messages:
         return
 
@@ -249,9 +213,7 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if q.data == "cancel":
         pending_messages.pop(uid, None)
-        context.user_data.clear()
         await q.message.delete()
-        await q.message.reply_text("❌ Cancelled")
         return
 
     if q.data == "vanced":
@@ -272,9 +234,7 @@ def run():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("panel", panel))
-
-    app.add_handler(MessageHandler(filters.TEXT, handle_message))
+    app.add_handler(MessageHandler(filters.ALL, handle_message))
     app.add_handler(CallbackQueryHandler(callback))
 
     app.run_polling()
