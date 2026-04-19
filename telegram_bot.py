@@ -1,4 +1,4 @@
-
+```python
 import os
 import threading
 import time
@@ -223,6 +223,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pending_messages[uid]["type"] = "video"
         pending_messages[uid]["file_id"] = msg.video.file_id
 
+    elif msg.document:
+        pending_messages[uid]["type"] = "document"
+        pending_messages[uid]["file_id"] = msg.document.file_id
+
     await update.message.reply_text(
         build_template(text, "vanced"),
         reply_markup=preview_buttons(uid)
@@ -245,6 +249,14 @@ async def send(context, cid, data, group):
         await context.bot.send_video(
             chat_id=cid,
             video=data["file_id"],
+            caption=caption,
+            reply_markup=buttons
+        )
+
+    elif data["type"] == "document":
+        await context.bot.send_document(
+            chat_id=cid,
+            document=data["file_id"],
             caption=caption,
             reply_markup=buttons
         )
@@ -338,7 +350,7 @@ def run():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("panel", panel))
 
-    app.add_handler(MessageHandler(filters.TEXT, handle_message))
+    app.add_handler(MessageHandler(filters.ALL, handle_message))
     app.add_handler(CallbackQueryHandler(callback))
 
     app.run_polling()
@@ -348,3 +360,4 @@ if __name__ == "__main__":
     threading.Thread(target=run_web).start()
     threading.Thread(target=ping, daemon=True).start()
     run()
+```
