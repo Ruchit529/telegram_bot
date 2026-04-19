@@ -1,4 +1,4 @@
-```python
+
 import os
 import threading
 import time
@@ -360,4 +360,3 @@ if __name__ == "__main__":
     threading.Thread(target=run_web).start()
     threading.Thread(target=ping, daemon=True).start()
     run()
-```
