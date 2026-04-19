@@ -209,7 +209,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return
 
     # ===== NEW POST =====
- msg = update.message
+
+msg = update.message
 
 pending_messages[uid] = {
     "text": text,
@@ -225,7 +226,6 @@ if msg.photo:
 elif msg.video:
     pending_messages[uid]["type"] = "video"
     pending_messages[uid]["file_id"] = msg.video.file_id
-
 
 await update.message.reply_text(
     build_template(text, "vanced"),
