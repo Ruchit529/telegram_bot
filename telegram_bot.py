@@ -1,5 +1,4 @@
 import os
-import json
 import threading
 import time
 import requests
@@ -19,48 +18,12 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 ALLOWED_USERS = {7173549132, 7050803817}
 SELF_URL = os.getenv("SELF_URL", "")
 
-DATA_FILE = "data.json"
 pending_messages = {}
+silent_mode = {}
 
-# ===== DATA =====
 channel_groups = {"vanced": [], "crunchy": []}
 
-footers = {
-    "vanced": {"enabled": True, "title": "Join Vanced 👇", "channels": []},
-    "crunchy": {"enabled": True, "title": "Join Crunchy 👇", "channels": []},
-}
-
-# ===== LOAD / SAVE =====
-def load_data():
-    global channel_groups, footers
-    try:
-        with open(DATA_FILE, "r") as f:
-            data = json.load(f)
-            channel_groups = data.get("groups", channel_groups)
-            footers.update(data.get("footers", {}))
-    except:
-        save_data()
-
-def save_data():
-    with open(DATA_FILE, "w") as f:
-        json.dump({
-            "groups": channel_groups,
-            "footers": footers
-        }, f, indent=4)
-
-# ===== TEMPLATE =====
-def build_template(text, group):
-    msg = f"👇👇👇\n\n{text}\n\n"
-
-    f = footers[group]
-    if f["enabled"] and f["channels"]:
-        msg += f"{f['title']}\n\n"
-        for ch in f["channels"]:
-            msg += f"👉 {ch}\n"
-
-    return msg.strip()
-
-# ===== WEB =====
+# ===== WEB SERVER =====
 app_web = Flask(__name__)
 
 @app_web.route("/")
@@ -68,7 +31,8 @@ def home():
     return "Bot Running"
 
 def run_web():
-    app_web.run(host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
+    port = int(os.getenv("PORT", 10000))
+    app_web.run(host="0.0.0.0", port=port)
 
 def ping():
     while True:
@@ -79,96 +43,126 @@ def ping():
                 pass
         time.sleep(300)
 
+# ===== TEMPLATE =====
+def build_template(text):
+    return f"👇👇👇\n\n{text}".strip()
+
 # ===== BUTTONS =====
-def preview_buttons():
+def preview_buttons(user_id):
+    silent = silent_mode.get(user_id, False)
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("✏ Edit Caption", callback_data="edit")],
+        [InlineKeyboardButton("🔕 Silent ON" if silent else "🔔 Silent OFF", callback_data="toggle")],
+        [InlineKeyboardButton("➕ Add Button", callback_data="add_btn")],
+        [InlineKeyboardButton("✏ Edit", callback_data="edit")],
         [
-            InlineKeyboardButton("🎮 Vanced", callback_data="send_vanced"),
-            InlineKeyboardButton("🍿 Crunchy", callback_data="send_crunchy"),
+            InlineKeyboardButton("🎮 Vanced Games", callback_data="vanced"),
+            InlineKeyboardButton("🍿 Crunchyroll Anime", callback_data="crunchy"),
         ],
-        [InlineKeyboardButton("🚀 Both", callback_data="send_both")],
+        [InlineKeyboardButton("🚀 Send to Both", callback_data="both")],
         [InlineKeyboardButton("❌ Cancel", callback_data="cancel")]
     ])
 
-# ===== START =====
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id in ALLOWED_USERS:
-        await update.message.reply_text("Send post")
+def build_post_buttons(btns):
+    if not btns:
+        return None
+    return InlineKeyboardMarkup([[InlineKeyboardButton(b["name"], url=b["link"])] for b in btns])
 
-# ===== PANEL =====
-async def panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in ALLOWED_USERS:
-        return
-
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📺 Vanced Footer", callback_data="panel_vanced")],
-        [InlineKeyboardButton("🍿 Crunchy Footer", callback_data="panel_crunchy")],
+# ===== ADMIN PANEL =====
+def panel_menu():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📡 Post Channels", callback_data="p_post")],
+        [InlineKeyboardButton("❌ Close", callback_data="p_close")]
     ])
 
-    await update.message.reply_text("⚙ Panel", reply_markup=keyboard)
+def panel_post():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("➕ Add Vanced", callback_data="add_v")],
+        [InlineKeyboardButton("➕ Add Crunchy", callback_data="add_c")],
+        [
+            InlineKeyboardButton("➖ Remove Vanced", callback_data="remove_v"),
+            InlineKeyboardButton("➖ Remove Crunchy", callback_data="remove_c"),
+        ],
+        [InlineKeyboardButton("📋 Show Channels", callback_data="show_p")],
+        [InlineKeyboardButton("🔙 Back", callback_data="p_back")]
+    ])
 
-# ===== MESSAGE =====
+# ===== COMMANDS =====
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ALLOWED_USERS:
+        return
+    await update.message.reply_text("Send post content")
+
+async def panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("⚙️ Admin Panel", reply_markup=panel_menu())
+
+# ===== MESSAGE HANDLER =====
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     uid = update.effective_user.id
     if uid not in ALLOWED_USERS:
         return
 
-    msg = update.message
-    text = msg.text or msg.caption or ""
+    text = update.message.text or ""
 
-    # ===== PANEL INPUT =====
-    if context.user_data.get("edit_title"):
-        group = context.user_data["edit_title"]
-        footers[group]["title"] = text
-        save_data()
-        context.user_data.pop("edit_title")
-        await msg.reply_text("✅ Title updated")
+    # ADD CHANNEL
+    if context.user_data.get("add_post"):
+        group = context.user_data.pop("add_post")
+
+        if not text.startswith("-100"):
+            await update.message.reply_text("❌ Invalid ID")
+            return
+
+        if text not in channel_groups[group]:
+            channel_groups[group].append(text)
+
+        await update.message.reply_text(f"✅ Added to {group}")
         return
 
-    if context.user_data.get("edit_channels"):
-        group = context.user_data["edit_channels"]
-        footers[group]["channels"] = text.split("\n")
-        save_data()
-        context.user_data.pop("edit_channels")
-        await msg.reply_text("✅ Channels updated")
+    # REMOVE CHANNEL (GROUP SPECIFIC)
+    if context.user_data.get("remove_post"):
+        group = context.user_data.pop("remove_post")
+
+        if text in channel_groups[group]:
+            channel_groups[group].remove(text)
+            await update.message.reply_text(f"❌ Removed from {group}")
+        else:
+            await update.message.reply_text("⚠️ Not found in that group")
+
         return
 
-    # ===== NEW POST =====
-    media = None
-    file_id = None
+    # BUTTON CREATION
+    if uid in pending_messages:
+        data = pending_messages[uid]
 
-    if msg.photo:
-        media = "photo"
-        file_id = msg.photo[-1].file_id
-    elif msg.video:
-        media = "video"
-        file_id = msg.video.file_id
+        if data.get("adding"):
+            if data["step"] == "name":
+                data["temp"] = text
+                data["step"] = "link"
+                await update.message.reply_text("Send button link")
+                return
+            else:
+                data["buttons"].append({"name": data["temp"], "link": text})
+                data["adding"] = False
+                await update.message.reply_text("✅ Button added", reply_markup=preview_buttons(uid))
+                return
 
+    # NEW POST
     pending_messages[uid] = {
         "text": text,
-        "media": media,
-        "file_id": file_id
+        "buttons": [],
+        "adding": False,
+        "step": "name"
     }
 
-    if media == "photo":
-        await msg.reply_photo(photo=file_id, caption=text, reply_markup=preview_buttons())
-    elif media == "video":
-        await msg.reply_video(video=file_id, caption=text, reply_markup=preview_buttons())
-    else:
-        await msg.reply_text(text, reply_markup=preview_buttons())
+    await update.message.reply_text(build_template(text), reply_markup=preview_buttons(uid))
 
 # ===== SEND =====
-async def send(context, cid, data, group):
-    text = build_template(data["text"], group)
-
-    if data["media"] == "photo":
-        await context.bot.send_photo(chat_id=cid, photo=data["file_id"], caption=text)
-    elif data["media"] == "video":
-        await context.bot.send_video(chat_id=cid, video=data["file_id"], caption=text)
-    else:
-        await context.bot.send_message(chat_id=cid, text=text)
+async def send(context, cid, data):
+    await context.bot.send_message(
+        chat_id=cid,
+        text=build_template(data["text"]),
+        reply_markup=build_post_buttons(data["buttons"])
+    )
 
 # ===== CALLBACK =====
 async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -177,81 +171,90 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     uid = q.from_user.id
 
-    if uid not in ALLOWED_USERS:
-        return
+    # PANEL NAV
+    if q.data == "p_post":
+        await q.edit_message_text("📡 Post Channels", reply_markup=panel_post()); return
+    if q.data == "p_back":
+        await q.edit_message_text("⚙️ Admin Panel", reply_markup=panel_menu()); return
+    if q.data == "p_close":
+        await q.message.delete(); return
 
-    # ===== PANEL OPEN =====
-    if q.data.startswith("panel_"):
-        group = q.data.split("_")[1]
+    # ADD
+    if q.data == "add_v":
+        context.user_data["add_post"] = "vanced"
+        await q.message.reply_text("Enter channel ID (-100...)"); return
 
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📺 Toggle", callback_data=f"toggle_{group}")],
-            [InlineKeyboardButton("✏ Title", callback_data=f"title_{group}")],
-            [InlineKeyboardButton("📢 Channels", callback_data=f"channels_{group}")],
-        ])
+    if q.data == "add_c":
+        context.user_data["add_post"] = "crunchy"
+        await q.message.reply_text("Enter channel ID (-100...)"); return
 
-        await q.message.reply_text(f"{group.upper()} Footer", reply_markup=keyboard)
-        return
+    # REMOVE (GROUP SPECIFIC)
+    if q.data == "remove_v":
+        context.user_data["remove_post"] = "vanced"
+        await q.message.reply_text("Send channel ID to remove from VANCED"); return
 
-    # ===== PANEL ACTION =====
-    if q.data.startswith("toggle_"):
-        group = q.data.split("_")[1]
-        footers[group]["enabled"] = not footers[group]["enabled"]
-        save_data()
-        await q.message.reply_text("✅ Toggled")
-        return
+    if q.data == "remove_c":
+        context.user_data["remove_post"] = "crunchy"
+        await q.message.reply_text("Send channel ID to remove from CRUNCHY"); return
 
-    if q.data.startswith("title_"):
-        group = q.data.split("_")[1]
-        context.user_data["edit_title"] = group
-        await q.message.reply_text("Send new title")
-        return
+    # SHOW
+    if q.data == "show_p":
+        text = "📡 Channels:\n\n"
+        for g, ids in channel_groups.items():
+            text += f"{g.upper()}:\n"
+            text += ("\n".join(ids) if ids else "none") + "\n\n"
+        await q.message.reply_text(text); return
 
-    if q.data.startswith("channels_"):
-        group = q.data.split("_")[1]
-        context.user_data["edit_channels"] = group
-        await q.message.reply_text("Send channels (one per line)")
-        return
-
-    # ===== SEND =====
+    # NORMAL FLOW
     if uid not in pending_messages:
         return
 
     data = pending_messages[uid]
 
+    # CANCEL
     if q.data == "cancel":
         pending_messages.pop(uid, None)
+        context.user_data.clear()
         await q.message.delete()
+        await q.message.reply_text("❌ Cancelled")
         return
 
-    if q.data == "send_vanced":
-        for cid in channel_groups["vanced"]:
-            await send(context, cid, data, "vanced")
+    if q.data == "toggle":
+        silent_mode[uid] = not silent_mode.get(uid, False)
+        await q.edit_message_reply_markup(reply_markup=preview_buttons(uid))
+        return
 
-    elif q.data == "send_crunchy":
-        for cid in channel_groups["crunchy"]:
-            await send(context, cid, data, "crunchy")
+    if q.data == "add_btn":
+        data["adding"] = True
+        data["step"] = "name"
+        await q.message.reply_text("Send button name")
+        return
 
-    elif q.data == "send_both":
-        for cid in channel_groups["vanced"]:
-            await send(context, cid, data, "vanced")
-        for cid in channel_groups["crunchy"]:
-            await send(context, cid, data, "crunchy")
+    # SEND
+    if q.data == "vanced":
+        targets = channel_groups["vanced"]
+    elif q.data == "crunchy":
+        targets = channel_groups["crunchy"]
+    else:
+        targets = channel_groups["vanced"] + channel_groups["crunchy"]
+
+    for cid in targets:
+        await send(context, cid, data)
 
     pending_messages.pop(uid, None)
     await q.message.delete()
 
 # ===== RUN =====
 def run():
-    load_data()
-
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("panel", panel))
-    app.add_handler(MessageHandler(filters.ALL, handle_message))
+
+    app.add_handler(MessageHandler(filters.TEXT, handle_message))
     app.add_handler(CallbackQueryHandler(callback))
 
+    print("Bot running...")
     app.run_polling()
 
 # ===== MAIN =====
