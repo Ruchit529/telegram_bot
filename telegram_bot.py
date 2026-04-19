@@ -143,8 +143,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text or update.message.caption or ""
     
     if context.user_data.get("edit_caption"):
-    pending_messages[uid]["text"] = text
-    context.user_data.pop("edit_caption")
+        pending_messages[uid]["text"] = text
+        context.user_data.pop("edit_caption")
 
     await update.message.reply_text(
         build_template(text, "vanced"),
