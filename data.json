@@ -1,11 +1,19 @@
 {
   "groups": {
-    "vanced": [],
-    "crunchy": []
+    "vanced": [-1003052492544],
+    "crunchy": [-1003238213356
+,-1003943431178]
   },
   "footer": {
-    "enabled": true,
-    "title": "Join Backup Channel 👇",
-    "channels": []
+    "vanced": {
+      "enabled": true,
+      "title": "Join Vanced 👇",
+      "channels": []
+    },
+    "crunchy": {
+      "enabled": true,
+      "title": "Join Crunchy 👇",
+      "channels": []
+    }
   }
 }
