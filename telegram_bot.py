@@ -282,24 +282,24 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if q.data == "vanced":
-    for cid in channel_groups["vanced"]:
-        await send(context, cid, data, "vanced")
+        for cid in channel_groups["vanced"]:
+            await send(context, cid, data, "vanced")
 
-elif q.data == "crunchy":
-    for cid in channel_groups["crunchy"]:
-        await send(context, cid, data, "crunchy")
+    elif q.data == "crunchy":
+        for cid in channel_groups["crunchy"]:
+            await send(context, cid, data, "crunchy")
 
-else:
-    for cid in channel_groups["vanced"]:
-        await send(context, cid, data, "vanced")
-    for cid in channel_groups["crunchy"]:
-        await send(context, cid, data, "crunchy")
-
-    for cid in targets:
-        await send(context, cid, data)
-
-    pending_messages.pop(uid, None)
-    await q.message.delete()
+    else:
+        for cid in channel_groups["vanced"]:
+            await send(context, cid, data, "vanced")
+        for cid in channel_groups["crunchy"]:
+            await send(context, cid, data, "crunchy")
+    
+        for cid in targets:
+            await send(context, cid, data)
+    
+        pending_messages.pop(uid, None)
+        await q.message.delete()
 
 # ===== RUN =====
 def run():
