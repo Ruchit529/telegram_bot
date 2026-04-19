@@ -168,7 +168,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ===== FOOTER ADD =====
     if context.user_data.get("add_footer"):
-    group = context.user_data.pop("add_footer")
+        group = context.user_data.pop("add_footer")
     if text.startswith("@"):
         if text not in footer_channels[group]:
             footer_channels[group].append(text)
