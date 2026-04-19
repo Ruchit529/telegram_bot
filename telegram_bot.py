@@ -19,13 +19,12 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 ALLOWED_USERS = {7173549132, 7050803817}
 SELF_URL = os.getenv("SELF_URL", "")
 
-DATA_FILE = "/data/data.json"  # Render disk
+DATA_FILE = "/data/data.json"
 
 pending_messages = {}
 
 channel_groups = {"vanced": [], "crunchy": []}
 
-# 🔥 NEW FOOTER SYSTEM
 footers = {
     "vanced": {"enabled": True, "title": "Join Vanced 👇", "channels": []},
     "crunchy": {"enabled": True, "title": "Join Crunchy 👇", "channels": []}
@@ -34,7 +33,6 @@ footers = {
 # ===== LOAD / SAVE =====
 def load_data():
     global channel_groups, footers
-
     try:
         with open(DATA_FILE, "r") as f:
             data = json.load(f)
@@ -44,13 +42,12 @@ def load_data():
         save_data()
 
 def save_data():
-    data = {
-        "groups": channel_groups,
-        "footer": footers
-    }
     os.makedirs("/data", exist_ok=True)
     with open(DATA_FILE, "w") as f:
-        json.dump(data, f, indent=4, ensure_ascii=False)
+        json.dump({
+            "groups": channel_groups,
+            "footer": footers
+        }, f, indent=4, ensure_ascii=False)
 
 # ===== WEB =====
 app_web = Flask(__name__)
@@ -97,15 +94,27 @@ def preview_buttons(uid):
 # ===== PANEL =====
 def panel_menu():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📡 Channels", callback_data="p_post")],
-        [InlineKeyboardButton("📺 Footer", callback_data="p_footer")],
+        [InlineKeyboardButton("📡 Post Channels", callback_data="p_post")],
+        [InlineKeyboardButton("📺 Footer Settings", callback_data="p_footer")],
         [InlineKeyboardButton("❌ Close", callback_data="p_close")]
+    ])
+
+def panel_post():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("➕ Add Vanced", callback_data="add_v")],
+        [InlineKeyboardButton("➕ Add Crunchy", callback_data="add_c")],
+        [
+            InlineKeyboardButton("➖ Remove Vanced", callback_data="remove_v"),
+            InlineKeyboardButton("➖ Remove Crunchy", callback_data="remove_c"),
+        ],
+        [InlineKeyboardButton("📋 Show Channels", callback_data="show_p")],
+        [InlineKeyboardButton("🔙 Back", callback_data="p_back")]
     ])
 
 def panel_footer_select():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🎮 Vanced", callback_data="p_footer_v")],
-        [InlineKeyboardButton("🍿 Crunchy", callback_data="p_footer_c")],
+        [InlineKeyboardButton("🎮 Vanced Footer", callback_data="p_footer_v")],
+        [InlineKeyboardButton("🍿 Crunchy Footer", callback_data="p_footer_c")],
         [InlineKeyboardButton("🔙 Back", callback_data="p_back")]
     ])
 
@@ -122,10 +131,11 @@ def panel_footer():
 async def panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ALLOWED_USERS:
         return
-    await update.message.reply_text("⚙️ Panel", reply_markup=panel_menu())
+    await update.message.reply_text("⚙️ Admin Panel", reply_markup=panel_menu())
 
 # ===== MESSAGE =====
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     uid = update.effective_user.id
     if uid not in ALLOWED_USERS:
         return
@@ -133,7 +143,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
     text = msg.text or msg.caption or ""
 
-    # FOOTER EDIT
+    # ===== CHANNEL ADD =====
+    if context.user_data.get("add_post"):
+        group = context.user_data.pop("add_post")
+        if text.startswith("-100"):
+            channel_groups[group].append(text)
+            save_data()
+            await msg.reply_text("✅ Added")
+        else:
+            await msg.reply_text("❌ Invalid ID")
+        return
+
+    # ===== CHANNEL REMOVE =====
+    if context.user_data.get("remove_post"):
+        group = context.user_data.pop("remove_post")
+        if text in channel_groups[group]:
+            channel_groups[group].remove(text)
+            save_data()
+            await msg.reply_text("❌ Removed")
+        return
+
+    # ===== FOOTER EDIT =====
     group = context.user_data.get("footer_group")
 
     if context.user_data.get("set_footer_title"):
@@ -158,7 +188,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.reply_text("❌ Removed")
         return
 
-    # EDIT CAPTION
+    # ===== EDIT CAPTION =====
     if context.user_data.get("edit_caption"):
         pending_messages[uid]["text"] = text
         data = pending_messages[uid]
@@ -173,7 +203,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop("edit_caption")
         return
 
-    # NEW POST
+    # ===== NEW POST =====
     media, file_id = None, None
     if msg.photo:
         media, file_id = "photo", msg.photo[-1].file_id
@@ -202,38 +232,75 @@ async def send(context, cid, data, group):
 
 # ===== CALLBACK =====
 async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     q = update.callback_query
     await q.answer()
     uid = q.from_user.id
 
-    # PANEL NAV
+    # ===== PANEL NAV (FIXED) =====
+    if q.data == "p_post":
+        await q.edit_message_text("📡 Post Channels", reply_markup=panel_post()); return
+
     if q.data == "p_footer":
-        await q.edit_message_text("Select Footer", reply_markup=panel_footer_select()); return
+        await q.edit_message_text("📺 Select Footer", reply_markup=panel_footer_select()); return
+
     if q.data == "p_footer_v":
         context.user_data["footer_group"] = "vanced"
         await q.edit_message_text("🎮 Vanced Footer", reply_markup=panel_footer()); return
+
     if q.data == "p_footer_c":
         context.user_data["footer_group"] = "crunchy"
         await q.edit_message_text("🍿 Crunchy Footer", reply_markup=panel_footer()); return
-    if q.data == "p_back":
-        await q.edit_message_text("⚙️ Panel", reply_markup=panel_menu()); return
 
+    if q.data == "p_back":
+        await q.edit_message_text("⚙️ Admin Panel", reply_markup=panel_menu()); return
+
+    if q.data == "p_close":
+        await q.message.delete(); return
+
+    # CHANNEL CONTROL
+    if q.data == "add_v":
+        context.user_data["add_post"] = "vanced"
+        await q.message.reply_text("Send channel ID"); return
+
+    if q.data == "add_c":
+        context.user_data["add_post"] = "crunchy"
+        await q.message.reply_text("Send channel ID"); return
+
+    if q.data == "remove_v":
+        context.user_data["remove_post"] = "vanced"
+        await q.message.reply_text("Send ID to remove"); return
+
+    if q.data == "remove_c":
+        context.user_data["remove_post"] = "crunchy"
+        await q.message.reply_text("Send ID to remove"); return
+
+    if q.data == "show_p":
+        text = ""
+        for g, ids in channel_groups.items():
+            text += f"{g}:\n" + ("\n".join(ids) or "none") + "\n\n"
+        await q.message.reply_text(text); return
+
+    # FOOTER CONTROL
     if q.data == "set_footer_title":
         context.user_data["set_footer_title"] = True
         await q.message.reply_text("Send title"); return
+
     if q.data == "add_footer":
         context.user_data["add_footer"] = True
         await q.message.reply_text("Send @channel"); return
+
     if q.data == "remove_footer":
         context.user_data["remove_footer"] = True
         await q.message.reply_text("Send channel"); return
+
     if q.data == "show_footer":
         g = context.user_data.get("footer_group")
         f = footers[g]
-        text = f["title"] + "\n\n" + "\n".join(f["channels"])
-        await q.message.reply_text(text); return
+        txt = f["title"] + "\n\n" + ("\n".join(f["channels"]) or "none")
+        await q.message.reply_text(txt); return
 
-    # SEND
+    # ===== POST SEND =====
     if uid not in pending_messages:
         return
 
@@ -252,6 +319,11 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await send(context, cid, data, "vanced")
         for cid in channel_groups["crunchy"]:
             await send(context, cid, data, "crunchy")
+
+    elif q.data == "cancel":
+        pending_messages.pop(uid, None)
+        await q.message.delete()
+        return
 
     pending_messages.pop(uid, None)
     await q.message.delete()
