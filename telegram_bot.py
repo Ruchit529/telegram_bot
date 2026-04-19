@@ -1,9 +1,5 @@
 import os
 import json
-import threading
-import time
-import requests
-from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
@@ -57,6 +53,7 @@ def build_template(text):
 # ===== BUTTONS =====
 def preview_buttons(uid):
     footer = data["footer"]["enabled"]
+
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🔔 Toggle Silent", callback_data="toggle")],
         [InlineKeyboardButton("📺 Footer ON" if footer else "📺 Footer OFF", callback_data="toggle_footer")],
@@ -70,9 +67,11 @@ def preview_buttons(uid):
     ])
 
 def post_buttons(btns):
+    if not btns:
+        return None
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(b["name"], url=b["link"])] for b in btns
-    ]) if btns else None
+    ])
 
 # ===== PANEL =====
 def panel():
@@ -88,7 +87,7 @@ def post_panel():
         [InlineKeyboardButton("➕ Add Crunchy", callback_data="add_c")],
         [InlineKeyboardButton("➖ Remove Vanced", callback_data="rem_v")],
         [InlineKeyboardButton("➖ Remove Crunchy", callback_data="rem_c")],
-        [InlineKeyboardButton("📋 Show", callback_data="show_p")],
+        [InlineKeyboardButton("📋 Show Channels", callback_data="show_p")],
         [InlineKeyboardButton("🔙 Back", callback_data="back")]
     ])
 
@@ -112,104 +111,142 @@ async def panel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ===== MESSAGE =====
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     uid = update.effective_user.id
     if uid not in ALLOWED_USERS:
         return
 
     text = update.message.text or ""
 
-    # ADD/REMOVE CHANNELS
+    # ADD CHANNEL
     if context.user_data.get("add"):
         g = context.user_data.pop("add")
-        data["groups"][g].append(text)
-        save_data()
-        await update.message.reply_text("Added")
+
+        if not text.startswith("-100"):
+            await update.message.reply_text("❌ Invalid ID")
+            return
+
+        if text not in data["groups"][g]:
+            data["groups"][g].append(text)
+            save_data()
+
+        await update.message.reply_text(f"✅ Added to {g}")
         return
 
+    # REMOVE CHANNEL
     if context.user_data.get("remove"):
         g = context.user_data.pop("remove")
+
         if text in data["groups"][g]:
             data["groups"][g].remove(text)
             save_data()
-        await update.message.reply_text("Removed")
+            await update.message.reply_text(f"❌ Removed from {g}")
+        else:
+            await update.message.reply_text("⚠️ Not found")
+
         return
 
-    # FOOTER
+    # FOOTER TITLE
     if context.user_data.get("title"):
         data["footer"]["title"] = text
         context.user_data.clear()
         save_data()
-        await update.message.reply_text("Title set")
+        await update.message.reply_text("✅ Title updated")
         return
 
+    # FOOTER ADD
     if context.user_data.get("add_footer"):
-        data["footer"]["channels"].append(text)
+        if text.startswith("@"):
+            if text not in data["footer"]["channels"]:
+                data["footer"]["channels"].append(text)
+                save_data()
+            await update.message.reply_text("✅ Added")
+        else:
+            await update.message.reply_text("❌ Must be @channel")
+
         context.user_data.clear()
-        save_data()
-        await update.message.reply_text("Added")
         return
 
+    # FOOTER REMOVE
     if context.user_data.get("rem_footer"):
         if text in data["footer"]["channels"]:
             data["footer"]["channels"].remove(text)
+            save_data()
+            await update.message.reply_text("❌ Removed")
+        else:
+            await update.message.reply_text("⚠️ Not found")
+
         context.user_data.clear()
-        save_data()
-        await update.message.reply_text("Removed")
         return
 
     # BUTTON FLOW
     if uid in pending_messages:
         d = pending_messages[uid]
+
         if d.get("add_btn"):
             if "name" not in d:
                 d["name"] = text
-                await update.message.reply_text("Send link")
+                await update.message.reply_text("Send button link")
             else:
                 d["buttons"].append({"name": d["name"], "link": text})
                 d.pop("name")
                 d["add_btn"] = False
-                await update.message.reply_text("Added", reply_markup=preview_buttons(uid))
+                await update.message.reply_text("✅ Button added", reply_markup=preview_buttons(uid))
             return
 
+    # NEW POST
     pending_messages[uid] = {"text": text, "buttons": []}
-    await update.message.reply_text(build_template(text), reply_markup=preview_buttons(uid))
+
+    await update.message.reply_text(
+        build_template(text),
+        reply_markup=preview_buttons(uid)
+    )
 
 # ===== CALLBACK =====
 async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     q = update.callback_query
     await q.answer()
     uid = q.from_user.id
 
+    # PANEL NAV
     if q.data == "p_post":
-        await q.edit_message_text("Post", reply_markup=post_panel()); return
+        await q.edit_message_text("📡 Post Channels", reply_markup=post_panel()); return
     if q.data == "p_footer":
-        await q.edit_message_text("Footer", reply_markup=footer_panel()); return
+        await q.edit_message_text("📺 Footer", reply_markup=footer_panel()); return
     if q.data == "back":
-        await q.edit_message_text("Panel", reply_markup=panel()); return
+        await q.edit_message_text("⚙️ Panel", reply_markup=panel()); return
     if q.data == "close":
         await q.message.delete(); return
 
+    # POST CHANNEL
     if q.data == "add_v":
         context.user_data["add"] = "vanced"
-        await q.message.reply_text("Send ID"); return
+        await q.message.reply_text("Send channel ID (-100...)"); return
+
     if q.data == "add_c":
         context.user_data["add"] = "crunchy"
-        await q.message.reply_text("Send ID"); return
+        await q.message.reply_text("Send channel ID (-100...)"); return
 
     if q.data == "rem_v":
         context.user_data["remove"] = "vanced"
-        await q.message.reply_text("Send ID"); return
+        await q.message.reply_text("Send ID to remove"); return
+
     if q.data == "rem_c":
         context.user_data["remove"] = "crunchy"
-        await q.message.reply_text("Send ID"); return
+        await q.message.reply_text("Send ID to remove"); return
 
     if q.data == "show_p":
-        txt = str(data["groups"])
-        await q.message.reply_text(txt); return
+        text = "📡 Channels:\n\n"
+        for g, ids in data["groups"].items():
+            text += f"{g.upper()}:\n"
+            text += ("\n".join(ids) if ids else "none") + "\n\n"
+        await q.message.reply_text(text); return
 
+    # FOOTER
     if q.data == "set_title":
         context.user_data["title"] = True
-        await q.message.reply_text("Send title"); return
+        await q.message.reply_text("Send new title"); return
 
     if q.data == "add_footer":
         context.user_data["add_footer"] = True
@@ -217,34 +254,40 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if q.data == "rem_footer":
         context.user_data["rem_footer"] = True
-        await q.message.reply_text("Send @channel"); return
+        await q.message.reply_text("Send @channel to remove"); return
 
     if q.data == "show_footer":
-        await q.message.reply_text(str(data["footer"])); return
+        f = data["footer"]
+        txt = f"{f['title']}\n\n" + ("\n".join(f["channels"]) or "none")
+        await q.message.reply_text(txt); return
 
+    # NORMAL FLOW
     if uid not in pending_messages:
         return
 
     d = pending_messages[uid]
 
+    # CANCEL
     if q.data == "cancel":
-        pending_messages.pop(uid)
+        pending_messages.pop(uid, None)
         context.user_data.clear()
         await q.message.delete()
         return
 
+    # TOGGLE FOOTER
     if q.data == "toggle_footer":
         data["footer"]["enabled"] = not data["footer"]["enabled"]
         save_data()
         await q.edit_message_reply_markup(reply_markup=preview_buttons(uid))
         return
 
+    # ADD BUTTON
     if q.data == "add_btn":
         d["add_btn"] = True
         await q.message.reply_text("Send button name")
         return
 
-    targets = []
+    # SEND
     if q.data == "vanced":
         targets = data["groups"]["vanced"]
     elif q.data == "crunchy":
@@ -259,7 +302,7 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=post_buttons(d["buttons"])
         )
 
-    pending_messages.pop(uid)
+    pending_messages.pop(uid, None)
     await q.message.delete()
 
 # ===== RUN =====
@@ -272,7 +315,8 @@ def run():
     app.add_handler(MessageHandler(filters.TEXT, handle_message))
     app.add_handler(CallbackQueryHandler(callback))
 
-    app.run_polling()
+    print("Bot running...")
+    app.run_polling(drop_pending_updates=True)
 
 # ===== MAIN =====
 if __name__ == "__main__":
