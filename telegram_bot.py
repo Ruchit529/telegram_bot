@@ -151,36 +151,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ===== POST CHANNEL ADD =====
-    if context.user_data.get("add_post"):
-        group = context.user_data.pop("add_post")
-        if text.startswith("-100"):
-            if text not in channel_groups[group]:
-                channel_groups[group].append(text)
-                await update.message.reply_text(f"✅ Added to {group}")
-            else:
-                await update.message.reply_text("⚠️ Already added")
-        else:
-            await update.message.reply_text("❌ Invalid channel ID")
-        return
-
-    # ===== POST CHANNEL REMOVE =====
-    if context.user_data.get("remove_post"):
-        group = context.user_data.pop("remove_post")
-        if text in channel_groups[group]:
-            channel_groups[group].remove(text)
-            await update.message.reply_text(f"❌ Removed from {group}")
-        else:
-            await update.message.reply_text("Not found")
-        return
-
-    # ===== FOOTER TITLE =====
-    if context.user_data.get("set_footer_title"):
-        footer_title = text
-        context.user_data.pop("set_footer_title")
-        await update.message.reply_text("✅ Footer title updated")
-        return
-
     # ===== FOOTER ADD =====
     if context.user_data.get("add_footer"):
         group = context.user_data.pop("add_footer")
@@ -215,17 +185,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "file_id": None
     }
 
-    if msg.photo:
-        pending_messages[uid]["type"] = "photo"
-        pending_messages[uid]["file_id"] = msg.photo[-1].file_id
+    # ✅ FIXED MEDIA DETECTION (forward + normal)
+    if msg.effective_attachment:
 
-    elif msg.video:
-        pending_messages[uid]["type"] = "video"
-        pending_messages[uid]["file_id"] = msg.video.file_id
+        if isinstance(msg.effective_attachment, list):  # photo
+            pending_messages[uid]["type"] = "photo"
+            pending_messages[uid]["file_id"] = msg.effective_attachment[-1].file_id
 
-    elif msg.document:
-        pending_messages[uid]["type"] = "document"
-        pending_messages[uid]["file_id"] = msg.document.file_id
+        else:
+            att = msg.effective_attachment
+
+            if hasattr(att, "file_id"):
+                pending_messages[uid]["file_id"] = att.file_id
+
+                if msg.video:
+                    pending_messages[uid]["type"] = "video"
+                elif msg.document:
+                    pending_messages[uid]["type"] = "document"
+                else:
+                    pending_messages[uid]["type"] = "photo"
 
     await update.message.reply_text(
         build_template(text, "vanced"),
@@ -282,44 +260,6 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.message.reply_text("Send new caption")
         return
 
-    if q.data == "p_post":
-        await q.edit_message_text("📡 Post Channels", reply_markup=panel_post()); return
-    if q.data == "p_footer":
-        await q.edit_message_text("📺 Footer Settings", reply_markup=panel_footer()); return
-    if q.data == "p_back":
-        await q.edit_message_text("⚙️ Admin Panel", reply_markup=panel_menu()); return
-    if q.data == "p_close":
-        await q.message.delete(); return
-
-    if q.data == "add_footer_v":
-        context.user_data["add_footer"] = "vanced"
-        await q.message.reply_text("Send @channel for Vanced"); return
-
-    if q.data == "add_footer_c":
-        context.user_data["add_footer"] = "crunchy"
-        await q.message.reply_text("Send @channel for Crunchy"); return
-
-    if q.data == "remove_footer_v":
-        context.user_data["remove_footer"] = "vanced"
-        await q.message.reply_text("Send channel to remove"); return
-
-    if q.data == "remove_footer_c":
-        context.user_data["remove_footer"] = "crunchy"
-        await q.message.reply_text("Send channel to remove"); return
-
-    if q.data == "add_v":
-        context.user_data["add_post"] = "vanced"
-        await q.message.reply_text("Send channel ID"); return
-    if q.data == "add_c":
-        context.user_data["add_post"] = "crunchy"
-        await q.message.reply_text("Send channel ID"); return
-    if q.data == "remove_v":
-        context.user_data["remove_post"] = "vanced"
-        await q.message.reply_text("Send ID to remove"); return
-    if q.data == "remove_c":
-        context.user_data["remove_post"] = "crunchy"
-        await q.message.reply_text("Send ID to remove"); return
-
     if uid not in pending_messages:
         return
 
@@ -360,3 +300,4 @@ if __name__ == "__main__":
     threading.Thread(target=run_web).start()
     threading.Thread(target=ping, daemon=True).start()
     run()
+
