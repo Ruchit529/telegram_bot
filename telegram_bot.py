@@ -26,7 +26,10 @@ channel_groups = {"vanced": [], "crunchy": []}
 # ===== FOOTER SYSTEM =====
 footer_enabled = True
 footer_title = "Join Backup Channel 👇"
-footer_channels = []
+footer_channels = {
+    "vanced": [],
+    "crunchy": []
+}
 
 # ===== WEB =====
 app_web = Flask(__name__)
@@ -49,12 +52,12 @@ def ping():
         time.sleep(300)
 
 # ===== TEMPLATE =====
-def build_template(text):
+def build_template(text, group=None):
     msg = f"👇👇👇\n\n{text}\n\n"
 
-    if footer_enabled and footer_channels:
+    if footer_enabled and group and footer_channels.get(group):
         msg += f"{footer_title}\n\n"
-        for ch in footer_channels:
+        for ch in footer_channels[group]:
             msg += f"👉 {ch}\n"
 
     return msg.strip()
@@ -103,8 +106,14 @@ def panel_post():
 def panel_footer():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("✏ Set Title", callback_data="set_footer_title")],
-        [InlineKeyboardButton("➕ Add Channel", callback_data="add_footer")],
-        [InlineKeyboardButton("➖ Remove Channel", callback_data="remove_footer")],
+        [
+    InlineKeyboardButton("➕ Add Vanced", callback_data="add_footer_v"),
+    InlineKeyboardButton("➕ Add Crunchy", callback_data="add_footer_c"),
+],
+[
+    InlineKeyboardButton("➖ Remove Vanced", callback_data="remove_footer_v"),
+    InlineKeyboardButton("➖ Remove Crunchy", callback_data="remove_footer_c"),
+],
         [InlineKeyboardButton("📋 Show Footer", callback_data="show_footer")],
         [InlineKeyboardButton("🔙 Back", callback_data="p_back")]
     ])
@@ -159,9 +168,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ===== FOOTER ADD =====
     if context.user_data.get("add_footer"):
-        if text.startswith("@"):
-            if text not in footer_channels:
-                footer_channels.append(text)
+    group = context.user_data.pop("add_footer")
+    if text.startswith("@"):
+        if text not in footer_channels[group]:
+            footer_channels[group].append(text)
+        await update.message.reply_text(f"✅ Added to {group}")
+    else:
+        await update.message.reply_text("❌ Must be @channel")
+    return
             await update.message.reply_text("✅ Channel added")
         else:
             await update.message.reply_text("❌ Must be @channel")
@@ -170,8 +184,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ===== FOOTER REMOVE =====
     if context.user_data.get("remove_footer"):
-        if text in footer_channels:
-            footer_channels.remove(text)
+    group = context.user_data.pop("remove_footer")
+    if text in footer_channels[group]:
+        footer_channels[group].remove(text)
+        await update.message.reply_text(f"❌ Removed from {group}")
+    else:
+        await update.message.reply_text("Not found")
+    return
             await update.message.reply_text("❌ Removed")
         else:
             await update.message.reply_text("Not found")
@@ -182,15 +201,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pending_messages[uid] = {"text": text, "buttons": []}
 
     await update.message.reply_text(
-        build_template(text),
+        build_template(text, "vanced"),
         reply_markup=preview_buttons(uid)
     )
 
 # ===== SEND =====
-async def send(context, cid, data):
+async def send(context, cid, data, group):
     await context.bot.send_message(
         chat_id=cid,
-        text=build_template(data["text"]),
+        text=build_template(data["text"], group),
         reply_markup=build_post_buttons(data["buttons"])
     )
 
@@ -243,7 +262,10 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["remove_footer"] = True
         await q.message.reply_text("Send channel to remove"); return
     if q.data == "show_footer":
-        text = footer_title + "\n\n" + ("\n".join(footer_channels) or "none")
+        text = f"{footer_title}\n\nVANCED:\n" + \
+       ("\n".join(footer_channels["vanced"]) or "none") + \
+       "\n\nCRUNCHY:\n" + \
+       ("\n".join(footer_channels["crunchy"]) or "none")
         await q.message.reply_text(text); return
 
     # NORMAL FLOW
@@ -265,11 +287,18 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if q.data == "vanced":
-        targets = channel_groups["vanced"]
-    elif q.data == "crunchy":
-        targets = channel_groups["crunchy"]
-    else:
-        targets = channel_groups["vanced"] + channel_groups["crunchy"]
+    for cid in channel_groups["vanced"]:
+        await send(context, cid, data, "vanced")
+
+elif q.data == "crunchy":
+    for cid in channel_groups["crunchy"]:
+        await send(context, cid, data, "crunchy")
+
+else:
+    for cid in channel_groups["vanced"]:
+        await send(context, cid, data, "vanced")
+    for cid in channel_groups["crunchy"]:
+        await send(context, cid, data, "crunchy")
 
     for cid in targets:
         await send(context, cid, data)
