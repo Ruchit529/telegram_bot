@@ -84,21 +84,33 @@ def build_template(text, group=None):
     return msg.strip()
 
 def preview_buttons(user_id, custom_btns=None):
-    keyboard = []
-    if custom_btns:
-        for b in custom_btns: keyboard.append([InlineKeyboardButton(b["name"], url=b["link"])])
-    
+    """Combines custom post buttons with admin control buttons."""
     silent = silent_mode.get(user_id, False)
+    keyboard = []
+    
+    # 1. Add custom URL buttons to the top of the keyboard
+    if custom_btns:
+        for b in custom_btns:
+            keyboard.append([InlineKeyboardButton(b["name"], url=b["link"])])
+            
+    # 2. Add admin control panel
     keyboard.extend([
         [InlineKeyboardButton("🔕 Silent ON" if silent else "🔔 Silent OFF", callback_data="toggle")],
         [InlineKeyboardButton("📺 Footer ON" if footer_enabled else "📺 Footer OFF", callback_data="toggle_footer")],
         [InlineKeyboardButton("➕ Add Button", callback_data="add_btn")],
         [InlineKeyboardButton("✏️ Edit Caption", callback_data="edit_caption")],
-        [InlineKeyboardButton("🎮 Vanced Games", callback_data="vanced"), InlineKeyboardButton("🍿 Crunchyroll Anime", callback_data="crunchy")],
+        [
+            InlineKeyboardButton("🎮 Vanced Games", callback_data="vanced"),
+            InlineKeyboardButton("🍿 Crunchyroll Anime", callback_data="crunchy"),
+        ],
         [InlineKeyboardButton("🚀 Send to Both", callback_data="both")],
         [InlineKeyboardButton("❌ Cancel", callback_data="cancel")]
     ])
     return InlineKeyboardMarkup(keyboard)
+
+def build_post_buttons(btns):
+    if not btns: return None
+    return InlineKeyboardMarkup([[InlineKeyboardButton(b["name"], url=b["link"])] for b in btns])
 
 # ===== ADMIN PANELS =====
 def panel_menu():
@@ -110,135 +122,106 @@ def panel_menu():
 
 def panel_post():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("➕ Add Vanced", callback_data="add_v"), InlineKeyboardButton("➕ Add Crunchy", callback_data="add_c")],
+        [InlineKeyboardButton("➕ Add Vanced", callback_data="add_v")],
+        [InlineKeyboardButton("➕ Add Crunchy", callback_data="add_c")],
         [InlineKeyboardButton("➖ Remove Vanced", callback_data="remove_v"), InlineKeyboardButton("➖ Remove Crunchy", callback_data="remove_c")],
-        [InlineKeyboardButton("📋 Show Channels", callback_data="show_p")],
         [InlineKeyboardButton("🔙 Back", callback_data="p_back")]
     ])
 
-def panel_footer():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("✏ Set Title", callback_data="set_footer_title")],
-        [InlineKeyboardButton("➕ Add Vanced", callback_data="add_footer_v"), InlineKeyboardButton("➕ Add Crunchy", callback_data="add_footer_c")],
-        [InlineKeyboardButton("➖ Remove Vanced", callback_data="remove_footer_v"), InlineKeyboardButton("➖ Remove Crunchy", callback_data="remove_footer_c")],
-        [InlineKeyboardButton("📋 Show Footer", callback_data="show_footer")],
-        [InlineKeyboardButton("🔙 Back", callback_data="p_back")]
-    ])
-
-# ===== MESSAGE HANDLER =====
+# ===== HANDLERS =====
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid not in ALLOWED_USERS: return
     msg = update.message
     text = msg.text or msg.caption or ""
 
-    # HANDLE ALL SETTINGS MODES
-    if context.user_data.get("set_footer_title"):
-        global footer_title
-        footer_title = text
-        context.user_data.pop("set_footer_title")
-        save_data(); await msg.reply_text("✅ Footer title updated!")
+    # 1. ADD BUTTON NAME
+    if context.user_data.get("adding_btn_name"):
+        context.user_data["temp_btn_name"] = text
+        context.user_data.pop("adding_btn_name")
+        context.user_data["adding_btn_link"] = True
+        await msg.reply_text(f"🔗 Great! Now send the **Link** (URL) for '{text}':")
         return
 
-    if context.user_data.get("add_footer"):
-        group = context.user_data.pop("add_footer")
-        if text.startswith("@") or text.startswith("-100"):
-            footer_channels[group].append(text); save_data(); await msg.reply_text(f"✅ Added to {group} footer.")
-        else: await msg.reply_text("❌ Invalid username/ID")
+    # 2. ADD BUTTON LINK
+    if context.user_data.get("adding_btn_link"):
+        if not (text.startswith("http") or text.startswith("t.me")):
+            await msg.reply_text("❌ Invalid Link! Send a valid URL (starting with http or t.me):")
+            return
+        
+        name = context.user_data.pop("temp_btn_name")
+        context.user_data.pop("adding_btn_link")
+        
+        if uid in pending_messages:
+            pending_messages[uid]["buttons"].append({"name": name, "link": text})
+            # Resend Preview with new button
+            data = pending_messages[uid]
+            kb = preview_buttons(uid, data["buttons"])
+            temp = build_template(data["text"], "vanced")
+            if data["type"] == "photo": await msg.reply_photo(data["file_id"], caption=temp, reply_markup=kb)
+            elif data["type"] == "video": await msg.reply_video(data["file_id"], caption=temp, reply_markup=kb)
+            else: await msg.reply_text(temp, reply_markup=kb)
         return
 
-    if context.user_data.get("remove_footer"):
-        group = context.user_data.pop("remove_footer")
-        if text in footer_channels[group]:
-            footer_channels[group].remove(text); save_data(); await msg.reply_text("✅ Removed")
-        else: await msg.reply_text("❌ Not found")
-        return
-
+    # 3. SETTINGS MODES
     if context.user_data.get("add_post"):
         group = context.user_data.pop("add_post")
         if text.startswith("-100"): channel_groups[group].append(text); save_data(); await msg.reply_text("✅ Added")
         else: await msg.reply_text("❌ Invalid ID")
         return
 
-    if context.user_data.get("adding_btn_name"):
-        context.user_data["temp_btn_name"] = text
-        context.user_data.pop("adding_btn_name")
-        context.user_data["adding_btn_link"] = True
-        await msg.reply_text(f"🔗 Send the **Link** for '{text}':")
-        return
-
-    if context.user_data.get("adding_btn_link"):
-        name = context.user_data.pop("temp_btn_name")
-        context.user_data.pop("adding_btn_link")
-        if uid in pending_messages:
-            pending_messages[uid]["buttons"].append({"name": name, "link": text})
-            await msg.reply_text(f"✅ Button '{name}' added!")
-        return
-
-    # NEW POST START
+    # 4. NEW POST
     pending_messages[uid] = {"text": text, "buttons": [], "type": "text", "file_id": None}
-    if msg.photo: 
+    if msg.photo:
         pending_messages[uid]["type"] = "photo"
         pending_messages[uid]["file_id"] = msg.photo[-1].file_id
     elif msg.video:
         pending_messages[uid]["type"] = "video"
         pending_messages[uid]["file_id"] = msg.video.file_id
 
+    await msg.reply_text("📸 Preview Generated:", reply_markup=preview_buttons(uid, []))
+    # Send actual preview content
+    data = pending_messages[uid]
     kb = preview_buttons(uid, [])
-    await msg.reply_text("📸 **New Post Received!**", reply_markup=kb)
+    temp = build_template(text, "vanced")
+    if data["type"] == "photo": await msg.reply_photo(data["file_id"], caption=temp, reply_markup=kb)
+    elif data["type"] == "video": await msg.reply_video(data["file_id"], caption=temp, reply_markup=kb)
+    else: await msg.reply_text(temp, reply_markup=kb)
 
-# ===== CALLBACK HANDLER =====
 async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global footer_enabled
     q = update.callback_query
     uid = q.from_user.id
     await q.answer()
 
-    # --- 1. SETTINGS & NAVIGATION (Do not require pending post) ---
-    if q.data == "p_post": await q.edit_message_text("📡 Post Channels", reply_markup=panel_post()); return
-    if q.data == "p_footer": await q.edit_message_text("📺 Footer Settings", reply_markup=panel_footer()); return
-    if q.data == "p_back": await q.edit_message_text("⚙️ Admin Panel", reply_markup=panel_menu()); return
-    if q.data == "p_close": await q.message.delete(); return
-
-    if q.data == "set_footer_title":
-        context.user_data["set_footer_title"] = True
-        await q.message.reply_text("✏️ Send the new Footer Title:"); return
-
-    if q.data == "show_footer":
-        v = "\n".join(footer_channels["vanced"]) or "None"
-        c = "\n".join(footer_channels["crunchy"]) or "None"
-        await q.message.reply_text(f"📺 **Footer Settings**\n\nTitle: {footer_title}\n\nVanced Footer:\n{v}\n\nCrunchy Footer:\n{c}"); return
-
-    if q.data == "add_footer_v": context.user_data["add_footer"] = "vanced"; await q.message.reply_text("Send @channel for Vanced Footer:"); return
-    if q.data == "add_footer_c": context.user_data["add_footer"] = "crunchy"; await q.message.reply_text("Send @channel for Crunchy Footer:"); return
-    if q.data == "remove_footer_v": context.user_data["remove_footer"] = "vanced"; await q.message.reply_text("Send channel name to remove from Vanced:"); return
-    if q.data == "remove_footer_c": context.user_data["remove_footer"] = "crunchy"; await q.message.reply_text("Send channel name to remove from Crunchy:"); return
-
     if q.data == "add_btn":
         context.user_data["adding_btn_name"] = True
-        await q.message.reply_text("✏️ Send Button Name:"); return
+        await q.message.reply_text("✏️ Send the **Name** for your button:")
+        return
 
     if q.data == "toggle_footer":
-        footer_enabled = not footer_enabled; save_data()
-        await q.edit_message_reply_markup(reply_markup=preview_buttons(uid, pending_messages.get(uid, {}).get("buttons", []))); return
+        footer_enabled = not footer_enabled
+        save_data()
+        await q.edit_message_reply_markup(reply_markup=preview_buttons(uid, pending_messages.get(uid, {}).get("buttons", [])))
+        return
 
-    # --- 2. POSTING (Require pending post) ---
-    if q.data in ["vanced", "crunchy", "both"]:
-        if uid not in pending_messages:
-            await q.message.reply_text("❌ No active post found. Send a new image/video first."); return
-        
-        data = pending_messages[uid]
-        if q.data == "vanced":
-            for cid in channel_groups["vanced"]: await send_post(context, cid, data, "vanced")
-        elif q.data == "crunchy":
-            for cid in channel_groups["crunchy"]: await send_post(context, cid, data, "crunchy")
-        elif q.data == "both":
-            for cid in channel_groups["vanced"]: await send_post(context, cid, data, "vanced")
-            for cid in channel_groups["crunchy"]: await send_post(context, cid, data, "crunchy")
-        
-        await q.message.reply_text("✅ Success!"); await q.message.delete(); pending_messages.pop(uid)
+    if q.data == "cancel":
+        pending_messages.pop(uid, None)
+        await q.message.delete(); return
 
-async def send_post(context, cid, data, group):
+    # Posting logic
+    if uid not in pending_messages: return
+    data = pending_messages[uid]
+
+    if q.data == "vanced":
+        for cid in channel_groups["vanced"]: await send_to_channel(context, cid, data, "vanced")
+        await q.message.reply_text("✅ Posted!"); await q.message.delete()
+    elif q.data == "both":
+        for cid in channel_groups["vanced"]: await send_to_channel(context, cid, data, "vanced")
+        for cid in channel_groups["crunchy"]: await send_to_channel(context, cid, data, "crunchy")
+        await q.message.reply_text("✅ Posted Both!"); await q.message.delete()
+
+async def send_to_channel(context, cid, data, group):
     cap = build_template(data["text"], group)
     btns = build_post_buttons(data["buttons"])
     try:
@@ -249,6 +232,7 @@ async def send_post(context, cid, data, group):
 
 def run():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start", lambda u, c: u.message.reply_text("Send media to start post.")))
     app.add_handler(CommandHandler("panel", lambda u, c: u.message.reply_text("Admin Panel", reply_markup=panel_menu())))
     app.add_handler(MessageHandler(filters.TEXT | filters.PHOTO | filters.VIDEO, handle_message))
     app.add_handler(CallbackQueryHandler(callback))
