@@ -67,23 +67,32 @@ async def cancel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def post_init(application) -> None:
     """Asynchronous application post-init hook. Boots database, queue worker, and state sweeps."""
     logger.info("Bot initializing...")
-    # 1. Initialize persistent DB schemas
+    
+    # 1. Wire Telegram Bot instance to backup manager and restore database if available
+    from services.backup_manager import backup_manager
+    backup_manager.set_bot(application.bot)
+    await backup_manager.restore_backup()
+    
+    # 2. Initialize persistent DB schemas
     await db.initialize()
     
-    # 2. Wire bot instance and run non-blocking scheduler worker
+    # 3. Wire bot instance and run non-blocking scheduler worker
     queue_manager.set_bot(application.bot)
     queue_manager.start()
 
-    # 3. Create persistent task for FSM sweeper cleanup loop
+    # 4. Create persistent task for FSM sweeper cleanup loop
     asyncio.create_task(fsm.start_cleanup_loop(STATE_CLEANUP_INTERVAL))
 
-    # 4. Boot keep-alive web server and self-ping thread for Render deployment
+    # 5. Boot keep-alive web server and self-ping thread for Render deployment
     try:
         from services.keep_alive import start_keep_alive
         start_keep_alive()
     except Exception as e:
         logger.error(f"Error starting keep-alive service: {e}", exc_info=True)
 
+    # 6. Start persistent database backup task
+    asyncio.create_task(backup_manager.start_backup_loop(120)) # Check every 2 minutes
+    
     logger.info("Bot application successfully booted and workers online.")
 
 async def post_shutdown(application) -> None:
