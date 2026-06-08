@@ -195,22 +195,15 @@ class QueueManager:
         backoff = min(RETRY_INITIAL_DELAY * (2 ** current_retries), RETRY_MAX_DELAY)
         logger.info(f"Scheduling retry #{current_retries + 1} for item #{queue_id} in {backoff} seconds.")
         
+        scheduled_at = time.time() + backoff
         # Increment retry and reset state to pending with delay
         await db.update_queue_status(
             queue_id=queue_id,
             status="pending",
             error_message=last_error,
-            increment_retry=True
+            increment_retry=True,
+            scheduled_at=scheduled_at
         )
-        
-        # Update schedule timestamp explicitly
-        scheduled_time = time.time() + backoff
-        async with aiosqlite.connect(db.db_path) as conn:
-            await conn.execute(
-                "UPDATE posting_queue SET scheduled_at = ? WHERE queue_id = ?",
-                (scheduled_time, queue_id)
-            )
-            await conn.commit()
 
     def _build_keyboard(self, buttons_config: list) -> Optional[InlineKeyboardMarkup]:
         """Constructs an InlineKeyboardMarkup from JSON stored buttons data."""
