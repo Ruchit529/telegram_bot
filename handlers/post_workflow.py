@@ -142,9 +142,12 @@ async def post_callback_router(update: Update, context: ContextTypes.DEFAULT_TYP
             text=(
                 "🎹 <b>Add Custom Inline Buttons</b>\n\n"
                 "Please send your custom URL button configurations below.\n"
-                "Syntax: <code>Name | URL</code>\n\n"
-                "<b>Example:</b>\n"
+                "Syntax: <code>Name | URL</code> or <code>Name -> URL</code>\n\n"
+                "<b>Example (Single Button):</b>\n"
                 "<code>Google | google.com</code>\n\n"
+                "<b>Example (Multiple Buttons & Rows):</b>\n"
+                "<code>Google -> google.com | GitHub -> github.com</code>\n"
+                "<code>Support Chat -> t.me/support</code>\n\n"
                 "<i>Send <code>none</code> or an empty message to clear custom buttons.</i>"
             ),
             parse_mode="HTML"
@@ -260,16 +263,9 @@ async def post_callback_router(update: Update, context: ContextTypes.DEFAULT_TYP
             # Dynamically compile the text specifically for this channel group footer
             compiled_text = await _compile_final_text(draft, category=cat)
             
-            # Extract buttons
-            formatted_buttons = []
-            for row in draft["buttons_config"]:
-                for btn in row:
-                    # Convert to queue buttons structure (name, link)
-                    formatted_buttons.append({"name": btn["text"], "link": btn["url"]})
-
             await db.add_to_queue(
                 user_id=user_id,
-                content={"text": compiled_text, "buttons": formatted_buttons},
+                content={"text": compiled_text, "buttons": draft["buttons_config"]},
                 media_file_id=draft["media_file_id"],
                 media_type=draft["media_type"],
                 channel_id=chan["channel_id"],
@@ -314,6 +310,62 @@ async def post_callback_router(update: Update, context: ContextTypes.DEFAULT_TYP
 
 # --- FSM Input Receivers ---
 
+def parse_buttons(raw_input: str) -> list:
+    """Parses text configurations of buttons submitted by admins, supporting multiple rows and buttons."""
+    if raw_input.lower().strip() == "none" or not raw_input.strip():
+        return []
+    
+    buttons_config = []
+    lines = raw_input.strip().split("\n")
+    
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        
+        row_buttons = []
+        # Check if this line uses the '->' format
+        if "->" in line:
+            parts = line.split("|")
+            for part in parts:
+                part = part.strip()
+                if not part:
+                    continue
+                if "->" in part:
+                    name, url = part.split("->", 1)
+                    name = name.strip()
+                    url = url.strip()
+                    if name and url:
+                        if not url.startswith(("http://", "https://", "tg://")):
+                            url = "https://" + url
+                        row_buttons.append({"text": name, "url": url})
+        else:
+            # Standard format or custom format using '|'
+            parts = [x.strip() for x in line.split("|") if x.strip()]
+            if len(parts) == 2:
+                name, url = parts[0], parts[1]
+                if not url.startswith(("http://", "https://", "tg://")):
+                    url = "https://" + url
+                row_buttons.append({"text": name, "url": url})
+            elif len(parts) > 2 and len(parts) % 2 == 0:
+                # Even number of parts, assume name | url | name | url
+                for i in range(0, len(parts), 2):
+                    name = parts[i]
+                    url = parts[i+1]
+                    if not url.startswith(("http://", "https://", "tg://")):
+                        url = "https://" + url
+                    row_buttons.append({"text": name, "url": url})
+            elif len(parts) == 1:
+                val = parts[0]
+                if val.startswith(("http://", "https://", "tg://")) or "." in val:
+                    url = val if val.startswith(("http://", "https://", "tg://")) else "https://" + val
+                    row_buttons.append({"text": val, "url": url})
+        
+        if row_buttons:
+            buttons_config.append(row_buttons)
+            
+    return buttons_config
+
 @safe_handler
 @admin_only
 async def handle_custom_buttons_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -332,19 +384,13 @@ async def handle_custom_buttons_input(update: Update, context: ContextTypes.DEFA
         await safe_delete_message(bot, user_id, guide_id)
 
     raw_input = update.message.text.strip()
-    buttons_config = []
+    buttons_config = parse_buttons(raw_input)
 
-    if raw_input.lower() != "none" and raw_input:
-        # Parse button structure using: Name | URL
-        if "|" in raw_input:
-            name, url = [x.strip() for x in raw_input.split("|", 1)]
-            if not url.startswith(("http://", "https://", "t.me/")):
-                url = "https://" + url
-            # Store in row structure
-            buttons_config.append([{"text": name, "url": url}])
-            await bot.send_message(chat_id=user_id, text=f"✅ Button '{name}' added!")
-        else:
-            await bot.send_message(chat_id=user_id, text="❌ Invalid button format. Cancelled.")
+    if raw_input.lower() != "none" and not buttons_config:
+        await bot.send_message(chat_id=user_id, text="❌ Invalid button format. No buttons were added.")
+    elif buttons_config:
+        total_buttons = sum(len(row) for row in buttons_config)
+        await bot.send_message(chat_id=user_id, text=f"✅ Configured {total_buttons} button(s) successfully!")
 
     # Save parsed config back to state
     draft["buttons_config"] = buttons_config
@@ -461,15 +507,9 @@ async def _execute_queue_scheduling(bot, user_id: int, draft: dict, delay_second
     for chan, c_cat in channels:
         compiled_text = await _compile_final_text(draft, category=c_cat)
         
-        # Extract buttons
-        formatted_buttons = []
-        for row in draft["buttons_config"]:
-            for btn in row:
-                formatted_buttons.append({"name": btn["text"], "link": btn["url"]})
-
         q_id = await db.add_to_queue(
             user_id=user_id,
-            content={"text": compiled_text, "buttons": formatted_buttons},
+            content={"text": compiled_text, "buttons": draft["buttons_config"]},
             media_file_id=draft["media_file_id"],
             media_type=draft["media_type"],
             channel_id=chan["channel_id"],
