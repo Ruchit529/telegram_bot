@@ -369,27 +369,47 @@ class DatabaseManager:
                     })
                 return items
 
-    async def update_queue_status(self, queue_id: int, status: str, error_message: str = None, increment_retry: bool = False):
+    async def update_queue_status(self, queue_id: int, status: str, error_message: str = None, increment_retry: bool = False, scheduled_at: float = None):
         now = time.time()
         async with aiosqlite.connect(self.db_path) as db:
             if increment_retry:
-                await db.execute(
-                    """
-                    UPDATE posting_queue
-                    SET status = ?, error_message = ?, retries = retries + 1, last_attempt_at = ?
-                    WHERE queue_id = ?
-                    """,
-                    (status, error_message, now, queue_id)
-                )
+                if scheduled_at is not None:
+                    await db.execute(
+                        """
+                        UPDATE posting_queue
+                        SET status = ?, error_message = ?, retries = retries + 1, last_attempt_at = ?, scheduled_at = ?
+                        WHERE queue_id = ?
+                        """,
+                        (status, error_message, now, scheduled_at, queue_id)
+                    )
+                else:
+                    await db.execute(
+                        """
+                        UPDATE posting_queue
+                        SET status = ?, error_message = ?, retries = retries + 1, last_attempt_at = ?
+                        WHERE queue_id = ?
+                        """,
+                        (status, error_message, now, queue_id)
+                    )
             else:
-                await db.execute(
-                    """
-                    UPDATE posting_queue
-                    SET status = ?, error_message = ?, last_attempt_at = ?
-                    WHERE queue_id = ?
-                    """,
-                    (status, error_message, now, queue_id)
-                )
+                if scheduled_at is not None:
+                    await db.execute(
+                        """
+                        UPDATE posting_queue
+                        SET status = ?, error_message = ?, last_attempt_at = ?, scheduled_at = ?
+                        WHERE queue_id = ?
+                        """,
+                        (status, error_message, now, scheduled_at, queue_id)
+                    )
+                else:
+                    await db.execute(
+                        """
+                        UPDATE posting_queue
+                        SET status = ?, error_message = ?, last_attempt_at = ?
+                        WHERE queue_id = ?
+                        """,
+                        (status, error_message, now, queue_id)
+                    )
             await db.commit()
 
     async def cancel_queue_item(self, queue_id: int):
