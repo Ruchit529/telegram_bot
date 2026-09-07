@@ -1,7 +1,10 @@
 import html
+import json
+import os
 import re
 import time
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+import urllib.parse
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.ext import ContextTypes, MessageHandler, filters
 
 from config import ADMIN_IDS, logger
@@ -155,24 +158,53 @@ async def post_callback_router(update: Update, context: ContextTypes.DEFAULT_TYP
         current_caption = draft.get("translated_text", "")
         escaped_caption = html.escape(current_caption)
 
-        keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("↩️ Revert to Original", callback_data="post:revert_caption"),
-                InlineKeyboardButton("❌ Cancel", callback_data="post:cancel_edit_caption")
-            ]
-        ])
+        base_url = os.getenv("RENDER_EXTERNAL_URL") or os.getenv("PING_URL") or os.getenv("WEBAPP_URL") or ""
+        if base_url and not base_url.startswith("http"):
+            base_url = "https://" + base_url
+        base_url = base_url.rstrip("/")
 
-        guide_msg = await bot.send_message(
-            chat_id=user_id,
-            text=(
-                "✏️ <b>Edit Caption Text</b>\n\n"
-                "👇 <b>Tap the text box below to copy the current caption:</b>\n\n"
-                f"<pre>{escaped_caption}</pre>\n\n"
-                "<i>Paste it into the chat input, edit your changes, and send!</i>"
-            ),
-            parse_mode="HTML",
-            reply_markup=keyboard
-        )
+        if base_url.startswith("https://"):
+            encoded_caption = urllib.parse.quote(current_caption)
+            editor_url = f"{base_url}/editor?text={encoded_caption}"
+
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("📱 Open Web Editor", web_app=WebAppInfo(url=editor_url))],
+                [
+                    InlineKeyboardButton("↩️ Revert to Original", callback_data="post:revert_caption"),
+                    InlineKeyboardButton("❌ Cancel", callback_data="post:cancel_edit_caption")
+                ]
+            ])
+
+            guide_msg = await bot.send_message(
+                chat_id=user_id,
+                text=(
+                    "📱 <b>Interactive Web Caption Editor</b>\n\n"
+                    "Tap <b>Open Web Editor</b> below to edit your caption directly in a clean popup editor!"
+                ),
+                parse_mode="HTML",
+                reply_markup=keyboard
+            )
+        else:
+            # Fallback for local environments without HTTPS domain
+            keyboard = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("↩️ Revert to Original", callback_data="post:revert_caption"),
+                    InlineKeyboardButton("❌ Cancel", callback_data="post:cancel_edit_caption")
+                ]
+            ])
+
+            guide_msg = await bot.send_message(
+                chat_id=user_id,
+                text=(
+                    "✏️ <b>Edit Caption Text</b>\n\n"
+                    "👇 <b>Tap the text box below to copy the current caption:</b>\n\n"
+                    f"<pre>{escaped_caption}</pre>\n\n"
+                    "<i>Paste it into the chat input, edit your changes, and send!</i>"
+                ),
+                parse_mode="HTML",
+                reply_markup=keyboard
+            )
+
         draft["caption_guide_msg_id"] = guide_msg.message_id
         await fsm.set_state(user_id, States.EDITING_CAPTION, draft)
         await query.answer()
@@ -816,3 +848,48 @@ async def _update_existing_preview(bot, user_id: int, draft: dict):
     if not success:
         logger.info(f"Failed to edit existing preview #{preview_id} for user {user_id}. Creating new preview.")
         await _send_new_preview(bot, user_id, draft)
+
+@safe_handler
+@admin_only
+async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Processes incoming data submitted from Telegram WebApp Mini App."""
+    user_id = update.effective_user.id
+    bot = context.bot
+    web_data = update.message.web_app_data.data if update.message and update.message.web_app_data else None
+
+    # Delete original WebApp status update message to keep chat workspace clean
+    await safe_delete_message(bot, user_id, update.message.message_id)
+
+    if not web_data:
+        return
+
+    try:
+        payload = json.loads(web_data)
+        if payload.get("action") == "update_caption":
+            new_text = payload.get("text", "").strip()
+
+            state, draft = await fsm.get_state(user_id)
+            if draft:
+                # Clean guide message if exists
+                guide_id = draft.get("caption_guide_msg_id")
+                if guide_id:
+                    await safe_delete_message(bot, user_id, guide_id)
+                    if "caption_guide_msg_id" in draft:
+                        del draft["caption_guide_msg_id"]
+
+                draft["translated_text"] = new_text
+                draft["was_translated"] = False
+
+                await fsm.set_state(user_id, States.PREVIEW_GENERATED, draft)
+                await _update_existing_preview(bot, user_id, draft)
+
+                # Send brief temporary toast indicator
+                confirm_msg = await bot.send_message(
+                    chat_id=user_id,
+                    text="✅ <b>Caption updated successfully via Web Editor!</b>",
+                    parse_mode="HTML"
+                )
+                await asyncio.sleep(2.0)
+                await safe_delete_message(bot, user_id, confirm_msg.message_id)
+    except Exception as e:
+        logger.error(f"Error handling WebApp data: {e}", exc_info=True)

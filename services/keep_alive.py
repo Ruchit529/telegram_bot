@@ -6,6 +6,125 @@ import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from config import logger
 
+WEB_EDITOR_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Edit Caption</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        :root {
+            --bg-color: var(--tg-theme-bg-color, #18222d);
+            --text-color: var(--tg-theme-text-color, #ffffff);
+            --hint-color: var(--tg-theme-hint-color, #708499);
+            --button-color: var(--tg-theme-button-color, #2b5278);
+            --button-text-color: var(--tg-theme-button-text-color, #ffffff);
+            --secondary-bg: var(--tg-theme-secondary-bg-color, #212d3b);
+        }
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 0;
+            padding: 16px;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+        h3 {
+            margin-top: 0;
+            margin-bottom: 8px;
+            font-size: 18px;
+            font-weight: 600;
+        }
+        .instructions {
+            font-size: 13px;
+            color: var(--hint-color);
+            margin-bottom: 12px;
+        }
+        textarea {
+            width: 100%;
+            flex: 1;
+            background-color: var(--secondary-bg);
+            color: var(--text-color);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 12px;
+            padding: 14px;
+            font-size: 15px;
+            font-family: inherit;
+            resize: none;
+            box-sizing: border-box;
+            outline: none;
+            line-height: 1.45;
+        }
+        textarea:focus {
+            border-color: var(--button-color);
+        }
+        .btn-container {
+            display: flex;
+            gap: 10px;
+            margin-top: 14px;
+        }
+        button {
+            flex: 1;
+            padding: 14px;
+            border: none;
+            border-radius: 12px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }
+        button:active {
+            opacity: 0.8;
+        }
+        .btn-save {
+            background-color: var(--button-color);
+            color: var(--button-text-color);
+        }
+        .btn-cancel {
+            background-color: transparent;
+            color: var(--hint-color);
+            border: 1px solid var(--hint-color);
+        }
+    </style>
+</head>
+<body>
+    <h3>✏️ Edit Post Caption</h3>
+    <div class="instructions">Edit your caption below and tap <b>Save & Apply</b> to update your preview.</div>
+    <textarea id="caption-input" placeholder="Type or edit your caption here..."></textarea>
+    <div class="btn-container">
+        <button class="btn-cancel" id="cancel-btn">Cancel</button>
+        <button class="btn-save" id="save-btn">💾 Save & Apply</button>
+    </div>
+
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.expand();
+        tg.ready();
+
+        const urlParams = new URLSearchParams(window.location.search);
+        const textParam = urlParams.get('text');
+        if (textParam !== null) {
+            document.getElementById('caption-input').value = decodeURIComponent(textParam);
+        }
+
+        document.getElementById('save-btn').onclick = function() {
+            const updatedText = document.getElementById('caption-input').value;
+            tg.sendData(JSON.stringify({ action: "update_caption", text: updatedText }));
+            tg.close();
+        };
+
+        document.getElementById('cancel-btn').onclick = function() {
+            tg.close();
+        };
+    </script>
+</body>
+</html>
+"""
+
 class KeepAliveHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path in ('/', '/ping'):
@@ -13,6 +132,11 @@ class KeepAliveHandler(BaseHTTPRequestHandler):
             self.send_header('Content-type', 'application/json')
             self.end_headers()
             self.wfile.write(b'{"status": "alive", "message": "Antigravity Bot is active!"}')
+        elif self.path.startswith('/editor') or self.path.startswith('/webapp'):
+            self.send_response(200)
+            self.send_header('Content-type', 'text/html; charset=utf-8')
+            self.end_headers()
+            self.wfile.write(WEB_EDITOR_HTML.encode('utf-8'))
         else:
             self.send_response(404)
             self.end_headers()

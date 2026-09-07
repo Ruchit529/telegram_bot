@@ -16,7 +16,7 @@ from handlers.admin import (
 )
 from handlers.post_workflow import (
     handle_incoming_post, post_callback_router, handle_custom_buttons_input,
-    handle_caption_input, handle_schedule_time_input
+    handle_caption_input, handle_schedule_time_input, handle_web_app_data
 )
 
 @safe_handler
@@ -165,7 +165,13 @@ def main():
     # Routes post preview workflow callback clicks
     application.add_handler(CallbackQueryHandler(post_callback_router, pattern=r"^post:"))
 
-    # 3. Centralized Message Router (Photos, Videos, Text)
+    # 3. WebApp Data Return Handler
+    application.add_handler(MessageHandler(
+        filters.StatusUpdate.WEB_APP_DATA,
+        handle_web_app_data
+    ))
+
+    # 4. Centralized Message Router (Photos, Videos, Text)
     application.add_handler(MessageHandler(
         filters.TEXT | filters.PHOTO | filters.VIDEO,
         general_message_router
