@@ -6,6 +6,15 @@ import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from config import logger
 
+_main_event_loop = None
+_global_bot = None
+
+def register_main_loop_and_bot(bot, loop):
+    global _global_bot, _main_event_loop
+    _global_bot = bot
+    _main_event_loop = loop
+    logger.info("Bot instance and main asyncio loop registered to keep_alive server.")
+
 WEB_EDITOR_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -113,8 +122,26 @@ WEB_EDITOR_HTML = """<!DOCTYPE html>
 
         document.getElementById('save-btn').onclick = function() {
             const updatedText = document.getElementById('caption-input').value;
-            tg.sendData(JSON.stringify({ action: "update_caption", text: updatedText }));
-            tg.close();
+            const userId = tg.initDataUnsafe?.user?.id || urlParams.get('user_id');
+
+            const saveBtn = document.getElementById('save-btn');
+            saveBtn.innerText = "⏳ Saving...";
+            saveBtn.disabled = true;
+
+            fetch('/api/save_caption', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ user_id: parseInt(userId), text: updatedText })
+            })
+            .then(res => res.json())
+            .then(data => {
+                try { tg.sendData(JSON.stringify({ action: "update_caption", text: updatedText })); } catch(e) {}
+                tg.close();
+            })
+            .catch(err => {
+                try { tg.sendData(JSON.stringify({ action: "update_caption", text: updatedText })); } catch(e) {}
+                tg.close();
+            });
         };
 
         document.getElementById('cancel-btn').onclick = function() {
@@ -124,6 +151,30 @@ WEB_EDITOR_HTML = """<!DOCTYPE html>
 </body>
 </html>
 """
+
+async def _apply_caption_update(user_id: int, text: str):
+    """Bridge routine to update FSM draft state and edit preview message on main asyncio loop."""
+    try:
+        from services.fsm import fsm, States
+        from handlers.post_workflow import _update_existing_preview
+        from handlers.error_handler import safe_delete_message
+
+        state, draft = await fsm.get_state(user_id)
+        if draft:
+            guide_id = draft.get("caption_guide_msg_id")
+            if guide_id and _global_bot:
+                await safe_delete_message(_global_bot, user_id, guide_id)
+                if "caption_guide_msg_id" in draft:
+                    del draft["caption_guide_msg_id"]
+
+            draft["translated_text"] = text
+            draft["was_translated"] = False
+
+            await fsm.set_state(user_id, States.PREVIEW_GENERATED, draft)
+            if _global_bot:
+                await _update_existing_preview(_global_bot, user_id, draft)
+    except Exception as e:
+        logger.error(f"Error applying caption update: {e}", exc_info=True)
 
 class KeepAliveHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -137,6 +188,34 @@ class KeepAliveHandler(BaseHTTPRequestHandler):
             self.send_header('Content-type', 'text/html; charset=utf-8')
             self.end_headers()
             self.wfile.write(WEB_EDITOR_HTML.encode('utf-8'))
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def do_POST(self):
+        if self.path == '/api/save_caption':
+            content_length = int(self.headers.get('Content-Length', 0))
+            post_data = self.rfile.read(content_length)
+            try:
+                import json
+                data = json.loads(post_data.decode('utf-8'))
+                user_id = data.get("user_id")
+                text = data.get("text", "")
+                
+                if user_id and _main_event_loop and _main_event_loop.is_running():
+                    asyncio.run_coroutine_threadsafe(
+                        _apply_caption_update(int(user_id), text),
+                        _main_event_loop
+                    )
+
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(b'{"status": "ok"}')
+            except Exception as e:
+                logger.error(f"Error in /api/save_caption POST: {e}", exc_info=True)
+                self.send_response(500)
+                self.end_headers()
         else:
             self.send_response(404)
             self.end_headers()

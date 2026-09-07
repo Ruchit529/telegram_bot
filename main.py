@@ -85,7 +85,8 @@ async def post_init(application) -> None:
 
     # 5. Boot keep-alive web server and self-ping thread for Render deployment
     try:
-        from services.keep_alive import start_keep_alive
+        from services.keep_alive import start_keep_alive, register_main_loop_and_bot
+        register_main_loop_and_bot(application.bot, asyncio.get_running_loop())
         start_keep_alive()
     except Exception as e:
         logger.error(f"Error starting keep-alive service: {e}", exc_info=True)

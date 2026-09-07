@@ -73,6 +73,7 @@ async def handle_incoming_post(update: Update, context: ContextTypes.DEFAULT_TYP
 
     # 4. Populate initial draft state data
     draft_data = {
+        "user_id": user_id,
         "original_text": original_text,
         "translated_text": translated_text,
         "media_file_id": media_file_id,
@@ -106,10 +107,9 @@ async def post_callback_router(update: Update, context: ContextTypes.DEFAULT_TYP
 
     # Get active draft state
     state, draft = await fsm.get_state(user_id)
-    if state != States.PREVIEW_GENERATED or not draft:
+    if not draft:
         # Stale workflow interaction
         await query.answer("⚠️ This draft session has expired. Send a new message to start.", show_alert=True)
-        await safe_delete_message(bot, user_id, query.message.message_id)
         return
 
     # Toggle silent/loud posting mode
@@ -705,11 +705,24 @@ async def _build_preview_markup(draft: dict) -> InlineKeyboardMarkup:
         silent = draft.get("silent_mode", False)
         footer_enabled = draft.get("footer_enabled", True)
 
+        base_url = os.getenv("RENDER_EXTERNAL_URL") or os.getenv("PING_URL") or os.getenv("WEBAPP_URL") or ""
+        if base_url and not base_url.startswith("http"):
+            base_url = "https://" + base_url
+        base_url = base_url.rstrip("/")
+
+        if base_url.startswith("https://"):
+            encoded_caption = urllib.parse.quote(draft.get("translated_text", ""))
+            target_user_id = draft.get("user_id", "")
+            editor_url = f"{base_url}/editor?user_id={target_user_id}&text={encoded_caption}"
+            edit_btn = InlineKeyboardButton("✏️ Edit Caption", web_app=WebAppInfo(url=editor_url))
+        else:
+            edit_btn = InlineKeyboardButton("✏️ Edit Caption", callback_data="post:edit_caption")
+
         control_btns = [
             [InlineKeyboardButton("🔕 Silent ON" if silent else "🔔 Silent OFF", callback_data="post:toggle_silent")],
             [InlineKeyboardButton("📺 Footer ON" if footer_enabled else "📺 Footer OFF", callback_data="post:toggle_footer")],
             [InlineKeyboardButton("➕ Add Button", callback_data="post:edit_buttons")],
-            [InlineKeyboardButton("✏️ Edit Caption", callback_data="post:edit_caption")],
+            [edit_btn],
             [
                 InlineKeyboardButton("🎮 Vanced Games", callback_data="post:vanced"),
                 InlineKeyboardButton("🍿 Crunchyroll Anime", callback_data="post:crunchy"),
