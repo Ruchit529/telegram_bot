@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: telegram-bot
+    env: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /ping
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: ADMIN_IDS
+        sync: false
+      - key: BACKUP_CHAT_ID
+        sync: false
+      - key: LOG_LEVEL
+        value: INFO

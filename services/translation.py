@@ -5,7 +5,7 @@ import time
 from typing import Dict, Tuple, List, Optional
 from deep_translator import GoogleTranslator
 from deep_translator.exceptions import BaseError
-from langdetect import detect, LangDetectException
+from langdetect import detect, detect_langs, LangDetectException
 
 from config import logger, DEFAULT_TARGET_LANGUAGE, TRANSLATION_RATE_LIMIT
 from database import db
@@ -79,8 +79,44 @@ class TranslationService:
         restored = re.sub(r" +", " ", restored).strip()
         return restored
 
+    def _is_invalid_translation(self, text: str) -> bool:
+        """
+        Checks if the translator returned a scraped HTTP error page or error message
+        instead of actual translated text.
+        """
+        if not text or not text.strip():
+            return True
+        
+        lowered = text.lower()
+        error_indicators = [
+            "error 500",
+            "500(servererror)",
+            "500. that's an error",
+            "500. thats an error",
+            "servererror",
+            "500 internal server error",
+            "429 too many requests",
+            "403 forbidden",
+            "that's an error",
+            "thats an error",
+            "there was an error",
+            "<!doctype html>",
+            "<html",
+            "<title>error"
+        ]
+        
+        for indicator in error_indicators:
+            if indicator in lowered:
+                return True
+                
+        return False
+
     async def detect_language(self, text: str) -> str:
-        """Detects the language of the clean text, defaulting to 'en' on failure."""
+        """
+        Detects the language of the clean text, defaulting to 'en' on failure.
+        Supports mixed posts (e.g. English header/title followed by a non-English body)
+        by inspecting lines, script ranges, and probability distributions.
+        """
         # Strip placeholders and HTML-like tags for cleaner detection
         clean_text = re.sub(r"<[^>]+>", "", text)
         clean_text = re.sub(r"#\w+", "", clean_text)
@@ -90,10 +126,40 @@ class TranslationService:
         if not clean_text or len(re.sub(r"[^\w]", "", clean_text)) < 3:
             return "en"
 
+        # 1. Direct Script Range Check (Cyrillic, Devanagari, Arabic, CJK)
+        if re.search(r"[\u0400-\u04FF]", clean_text):
+            return "ru"
+        if re.search(r"[\u0900-\u097F]", clean_text):
+            return "hi"
+        if re.search(r"[\u0600-\u06FF]", clean_text):
+            return "ar"
+        if re.search(r"[\u4e00-\u9fff\u3040-\u30ff]", clean_text):
+            return "zh"
+
+        # 2. Line-by-line inspection for mixed posts (e.g. EN title + ES/FR/IT body)
+        lines = [line.strip() for line in clean_text.split("\n") if line.strip()]
+        for line in lines:
+            words = re.sub(r"[^\w\s]", "", line).strip()
+            if len(words.split()) >= 3:
+                try:
+                    lang = await asyncio.to_thread(detect, line)
+                    if lang != "en":
+                        return lang
+                except Exception:
+                    continue
+
+        # 3. Probabilistic check with detect_langs
         try:
-            # Run blocking detection in thread pool
-            lang = await asyncio.to_thread(detect, clean_text)
-            return lang
+            predictions = await asyncio.to_thread(detect_langs, clean_text)
+            for p in predictions:
+                if p.lang != "en" and p.prob > 0.08:
+                    return p.lang
+        except Exception:
+            pass
+
+        # 4. Fallback to overall detect
+        try:
+            return await asyncio.to_thread(detect, clean_text)
         except LangDetectException:
             return "en"
         except Exception as e:
@@ -115,16 +181,21 @@ class TranslationService:
         # 1. Check Memory Cache
         cache_key = f"{text_hash}:{target_lang}"
         if cache_key in self._memory_cache:
-            logger.debug("Translation found in memory cache.")
-            return self._memory_cache[cache_key], "auto", True
+            cached_text = self._memory_cache[cache_key]
+            if not self._is_invalid_translation(cached_text):
+                logger.debug("Translation found in memory cache.")
+                return cached_text, "auto", True
+            else:
+                del self._memory_cache[cache_key]
 
         # 2. Check Database Cache
         db_cache = await db.get_cached_translation(text_hash)
         if db_cache:
             source_lang, translated_text = db_cache
-            self._memory_cache[cache_key] = translated_text
-            logger.debug("Translation found in database cache.")
-            return translated_text, source_lang, source_lang != target_lang
+            if not self._is_invalid_translation(translated_text):
+                self._memory_cache[cache_key] = translated_text
+                logger.debug("Translation found in database cache.")
+                return translated_text, source_lang, source_lang != target_lang
 
         # 3. Detect Language to skip translation if already in target language
         detected_lang = await self.detect_language(html_text)
@@ -142,44 +213,84 @@ class TranslationService:
         if not re.sub(r"[^\w]", "", words_only).strip():
             return html_text, detected_lang, False
 
-        # 5. External API translation (with Rate-Limiting & Thread Pool)
+        # 5. External API translation (with Rate-Limiting, Retries & Fast Failover Provider)
         translated_raw = ""
-        try:
-            async with self._api_call_lock:
-                # Enforce minimal request interval to avoid Google Translate rate limits
-                now = time.time()
-                elapsed = now - self._last_api_call_time
-                if elapsed < TRANSLATION_RATE_LIMIT:
-                    sleep_time = TRANSLATION_RATE_LIMIT - elapsed
-                    logger.debug(f"Rate limiter: sleeping for {sleep_time:.2f}s...")
-                    await asyncio.sleep(sleep_time)
+        max_attempts = 2
+        for attempt in range(max_attempts):
+            try:
+                async with self._api_call_lock:
+                    now = time.time()
+                    elapsed = now - self._last_api_call_time
+                    if elapsed < TRANSLATION_RATE_LIMIT:
+                        sleep_time = TRANSLATION_RATE_LIMIT - elapsed
+                        await asyncio.sleep(sleep_time)
 
-                self._last_api_call_time = time.time()
+                    self._last_api_call_time = time.time()
 
-                # Execute blocking translation inside threadpool
-                translator = GoogleTranslator(source="auto", target=target_lang)
-                translated_raw = await asyncio.to_thread(translator.translate, protected_text)
+                    # Execute primary GoogleTranslator
+                    translator = GoogleTranslator(source="auto", target=target_lang)
+                    res = await asyncio.to_thread(translator.translate, protected_text)
+                    
+                    if res and not self._is_invalid_translation(res):
+                        translated_raw = res
+                        break
+                    else:
+                        logger.warning(
+                            f"Google Translator returned invalid/error response (attempt {attempt+1}/{max_attempts}). Trying failover provider..."
+                        )
+            except BaseError as e:
+                logger.error(f"Google Translator API Error (attempt {attempt+1}/{max_attempts}): {e}")
+            except Exception as e:
+                logger.error(f"Unexpected translation error (attempt {attempt+1}/{max_attempts}): {e}")
 
-        except BaseError as e:
-            logger.error(f"Google Translator API Error: {e}")
-            # Fallback gracefully
-            return self._wrap_fallback_error(html_text), detected_lang, False
-        except Exception as e:
-            logger.error(f"Unexpected translation error: {e}", exc_info=True)
-            # Fallback gracefully
-            return self._wrap_fallback_error(html_text), detected_lang, False
+            # Instant Failover to MyMemory API if Google failed/rate-limited
+            logger.info("Attempting instant secondary API failover (MyMemory)...")
+            failover_res = await self._translate_mymemory(protected_text, detected_lang, target_lang)
+            if failover_res and not self._is_invalid_translation(failover_res):
+                logger.info("Failover translation succeeded via MyMemory.")
+                translated_raw = failover_res
+                break
 
-        if not translated_raw:
+            if attempt < max_attempts - 1:
+                await asyncio.sleep(0.3)
+
+        if not translated_raw or self._is_invalid_translation(translated_raw):
+            logger.error("All translation providers failed. Falling back to original text.")
             return self._wrap_fallback_error(html_text), detected_lang, False
 
         # 6. Re-stitch original formatting
         translated_html = self._restore_placeholders(translated_raw, placeholders)
+        if self._is_invalid_translation(translated_html):
+            logger.error("Restored translated HTML contained error signature. Falling back to original text.")
+            return self._wrap_fallback_error(html_text), detected_lang, False
 
         # 7. Update caches
         self._memory_cache[cache_key] = translated_html
         await db.set_cached_translation(text_hash, detected_lang, translated_html)
 
         return translated_html, detected_lang, True
+
+    async def _translate_mymemory(self, text: str, source_lang: str, target_lang: str) -> Optional[str]:
+        """Secondary fast failover translator using MyMemory API (free, fast, no scraping required)."""
+        try:
+            import urllib.parse
+            import httpx
+            src = source_lang if source_lang and source_lang != 'auto' else 'autodetect'
+            langpair = f"{src}|{target_lang}"
+            url = f"https://api.mymemory.translated.net/get?q={urllib.parse.quote(text)}&langpair={langpair}"
+            
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                res = await client.get(url)
+                if res.status_code == 200:
+                    data = res.json()
+                    translated = data.get("responseData", {}).get("translatedText")
+                    if translated and not self._is_invalid_translation(translated):
+                        # Clean up HTML tags if MyMemory wrapped result in <p>...</p>
+                        clean_res = re.sub(r"^<p>|</p>$", "", translated.strip(), flags=re.IGNORECASE)
+                        return clean_res
+        except Exception as e:
+            logger.warning(f"MyMemory failover translation failed: {e}")
+        return None
 
     def _wrap_fallback_error(self, text: str) -> str:
         """Wraps text in a gentle visual indicator that translation failed, keeping bot crash-free."""

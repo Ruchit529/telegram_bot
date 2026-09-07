@@ -11,6 +11,9 @@ class DatabaseManager:
     async def initialize(self):
         """Creates the database and initializes required tables if they don't exist."""
         logger.info(f"Initializing database at {self.db_path}...")
+        db_dir = os.path.dirname(os.path.abspath(self.db_path))
+        if db_dir:
+            os.makedirs(db_dir, exist_ok=True)
         async with aiosqlite.connect(self.db_path) as db:
             # Enable WAL mode for high concurrency
             await db.execute("PRAGMA journal_mode=WAL;")

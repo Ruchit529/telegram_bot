@@ -27,7 +27,7 @@ DATABASE_PATH = os.getenv("DATABASE_PATH", str(BASE_DIR / "bot.db"))
 
 # Translation Settings
 DEFAULT_TARGET_LANGUAGE = "en"
-TRANSLATION_RATE_LIMIT = 5.0  # Min seconds between translation requests to external service
+TRANSLATION_RATE_LIMIT = 0.2  # Min seconds between translation requests for real-time performance
 TRANSLATION_CACHE_EXPIRY_DAYS = 30
 
 # Queue & Retry Settings
