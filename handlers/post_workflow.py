@@ -1,3 +1,4 @@
+import html
 import re
 import time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -151,18 +152,56 @@ async def post_callback_router(update: Update, context: ContextTypes.DEFAULT_TYP
     elif data == "post:edit_caption":
         await fsm.set_state(user_id, States.EDITING_CAPTION, draft)
         
+        current_caption = draft.get("translated_text", "")
+        escaped_caption = html.escape(current_caption)
+
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("↩️ Revert to Original", callback_data="post:revert_caption"),
+                InlineKeyboardButton("❌ Cancel", callback_data="post:cancel_edit_caption")
+            ]
+        ])
+
         guide_msg = await bot.send_message(
             chat_id=user_id,
             text=(
                 "✏️ <b>Edit Caption Text</b>\n\n"
-                "Please send the new caption text below.\n"
-                "Emojis and HTML text formatting are supported."
+                "👇 <b>Tap the text box below to copy the current caption:</b>\n\n"
+                f"<pre>{escaped_caption}</pre>\n\n"
+                "<i>Paste it into the chat input, edit your changes, and send!</i>"
             ),
-            parse_mode="HTML"
+            parse_mode="HTML",
+            reply_markup=keyboard
         )
         draft["caption_guide_msg_id"] = guide_msg.message_id
         await fsm.set_state(user_id, States.EDITING_CAPTION, draft)
         await query.answer()
+
+    # Revert to original untranslated text
+    elif data == "post:revert_caption":
+        guide_id = draft.get("caption_guide_msg_id")
+        if guide_id:
+            await safe_delete_message(bot, user_id, guide_id)
+            if "caption_guide_msg_id" in draft:
+                del draft["caption_guide_msg_id"]
+        
+        draft["translated_text"] = draft.get("original_text", "")
+        draft["was_translated"] = False
+        await fsm.set_state(user_id, States.PREVIEW_GENERATED, draft)
+        await _update_existing_preview(bot, user_id, draft)
+        await query.answer("Reverted to original text.")
+
+    # Cancel caption edit and return to main preview
+    elif data == "post:cancel_edit_caption":
+        guide_id = draft.get("caption_guide_msg_id")
+        if guide_id:
+            await safe_delete_message(bot, user_id, guide_id)
+            if "caption_guide_msg_id" in draft:
+                del draft["caption_guide_msg_id"]
+        
+        await fsm.set_state(user_id, States.PREVIEW_GENERATED, draft)
+        await _update_existing_preview(bot, user_id, draft)
+        await query.answer("Caption editing cancelled.")
 
     # Trigger Scheduler sub-menu: Group Target Selection
     elif data == "post:schedule":
