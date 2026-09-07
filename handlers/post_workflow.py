@@ -58,13 +58,6 @@ async def handle_incoming_post(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         return
 
-    # Send a quick non-blocking status indicator
-    status_msg = await bot.send_message(
-        chat_id=user_id,
-        text="🌐 <i>Ingesting post and auto-detecting language...</i>",
-        parse_mode="HTML"
-    )
-
     # 2. Run high-fidelity translation to English prior to preview generation
     translated_text, detected_lang, was_translated = await translation_service.translate_html(original_text)
 
@@ -73,9 +66,6 @@ async def handle_incoming_post(update: Update, context: ContextTypes.DEFAULT_TYP
     old_preview_id = old_data.get("preview_message_id")
     if old_preview_id:
         await safe_delete_message(bot, user_id, old_preview_id)
-
-    # Delete status indicator
-    await safe_delete_message(bot, user_id, status_msg.message_id)
 
     # 4. Populate initial draft state data
     draft_data = {
