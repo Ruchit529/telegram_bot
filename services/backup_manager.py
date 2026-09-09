@@ -1,19 +1,50 @@
 import os
 import time
+import hashlib
 import asyncio
 from config import logger, DATABASE_PATH
 
 # Chat/Channel ID where the database backups will be sent and pinned
-BACKUP_CHAT_ID = os.getenv("BACKUP_CHAT_ID", "").strip()
+BACKUP_CHAT_ID_RAW = os.getenv("BACKUP_CHAT_ID", "").strip()
+
+def parse_chat_id(raw_id: str):
+    """Converts numeric channel/chat strings into int, keeping username strings intact."""
+    if not raw_id:
+        return None
+    try:
+        return int(raw_id)
+    except ValueError:
+        return raw_id
+
+BACKUP_CHAT_ID = parse_chat_id(BACKUP_CHAT_ID_RAW)
 
 class BackupManager:
     def __init__(self):
         self.last_backup_mtime = 0.0
+        self.last_backup_hash = ""
+        self.restored_successfully = False
         self.bot = None
 
     def set_bot(self, bot):
         """Passes the Telegram Bot instance to the backup manager."""
         self.bot = bot
+
+    def _compute_hash(self) -> str:
+        """Computes SHA-256 hash of the database file if it exists."""
+        if not os.path.exists(DATABASE_PATH):
+            return ""
+        try:
+            with open(DATABASE_PATH, "rb") as f:
+                return hashlib.sha256(f.read()).hexdigest()
+        except Exception as e:
+            logger.error(f"Failed to compute DB hash: {e}")
+            return ""
+
+    def sync_current_hash(self):
+        """Updates internal hash tracker to match current DB content without triggering backup."""
+        self.last_backup_hash = self._compute_hash()
+        if os.path.exists(DATABASE_PATH):
+            self.last_backup_mtime = os.path.getmtime(DATABASE_PATH)
 
     async def restore_backup(self) -> bool:
         """
@@ -44,6 +75,10 @@ class BackupManager:
                 logger.warning(f"Pinned document '{doc.file_name}' is not a SQLite database file. Skipping restore.")
                 return False
 
+            if doc.file_size == 0:
+                logger.warning("Pinned document file size is 0 bytes. Skipping restore of empty file.")
+                return False
+
             logger.info(f"Found pinned database backup '{doc.file_name}' (size: {doc.file_size} bytes). Downloading...")
             
             # Ensure the database directory exists
@@ -55,19 +90,19 @@ class BackupManager:
             
             logger.info("Database successfully restored from Telegram backup!")
             
-            # Sync our last backup time to the newly downloaded file modification time
-            if os.path.exists(DATABASE_PATH):
-                self.last_backup_mtime = os.path.getmtime(DATABASE_PATH)
+            self.sync_current_hash()
+            self.restored_successfully = True
             return True
             
         except Exception as e:
             logger.error(f"Failed to restore database backup from Telegram: {e}", exc_info=True)
             return False
 
-    async def perform_backup(self) -> bool:
+    async def perform_backup(self, force: bool = False) -> bool:
         """
         Checks if the database has been modified since the last backup.
-        If yes, uploads it to the backup channel and pins it.
+        Flushes WAL to disk, calculates SHA-256 hash, and if modified,
+        uploads to the backup channel and pins it.
         """
         if not BACKUP_CHAT_ID:
             return False
@@ -79,16 +114,24 @@ class BackupManager:
             return False
 
         try:
-            current_mtime = os.path.getmtime(DATABASE_PATH)
-            
-            # Only backup if the file has been modified since the last backup operation
-            if current_mtime <= self.last_backup_mtime:
+            # 1. Flush SQLite WAL to ensure bot.db is completely up-to-date
+            from database import db
+            await db.checkpoint()
+
+            # 2. Compute current SHA-256 hash
+            current_hash = self._compute_hash()
+            if not current_hash:
                 return False
 
-            # Add a small delay to ensure SQLite has finished writing and released locks
-            await asyncio.sleep(1.0)
+            # 3. Skip if hash is unchanged and backup is not forced
+            if not force and current_hash == self.last_backup_hash:
+                logger.debug("Database hash unchanged. Skipping backup.")
+                return False
+
+            # Add a small delay to ensure SQLite file locks are released cleanly
+            await asyncio.sleep(0.5)
             
-            logger.info(f"Database modification detected. Uploading backup to chat/channel: {BACKUP_CHAT_ID}...")
+            logger.info(f"Database modification detected (hash: {current_hash[:8]}...). Uploading backup to chat/channel: {BACKUP_CHAT_ID}...")
             
             # Send file to backup channel
             with open(DATABASE_PATH, "rb") as db_file:
@@ -96,7 +139,11 @@ class BackupManager:
                     chat_id=BACKUP_CHAT_ID,
                     document=db_file,
                     filename=os.path.basename(DATABASE_PATH),
-                    caption=f"📂 <b>Bot Database Backup</b>\n\n• Timestamp: <code>{time.strftime('%Y-%m-%d %H:%M:%S')}</code>",
+                    caption=(
+                        f"📂 <b>Bot Database Backup</b>\n\n"
+                        f"• Hash: <code>{current_hash[:10]}</code>\n"
+                        f"• Timestamp: <code>{time.strftime('%Y-%m-%d %H:%M:%S')}</code>"
+                    ),
                     parse_mode="HTML"
                 )
             
@@ -107,7 +154,8 @@ class BackupManager:
                 disable_notification=True
             )
             
-            self.last_backup_mtime = current_mtime
+            self.last_backup_hash = current_hash
+            self.last_backup_mtime = os.path.getmtime(DATABASE_PATH)
             logger.info("Database backup successfully uploaded and pinned.")
             return True
             
@@ -128,3 +176,4 @@ class BackupManager:
 
 # Singleton instance
 backup_manager = BackupManager()
+

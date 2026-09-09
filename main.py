@@ -75,6 +75,7 @@ async def post_init(application) -> None:
     
     # 2. Initialize persistent DB schemas
     await db.initialize()
+    backup_manager.sync_current_hash()
     
     # 3. Wire bot instance and run non-blocking scheduler worker
     queue_manager.set_bot(application.bot)

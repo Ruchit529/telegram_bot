@@ -173,6 +173,17 @@ async def admin_callback_router(update: Update, context: ContextTypes.DEFAULT_TY
         text, keyboard = await _build_diagnostics_menu()
         await safe_edit_message_text(bot, user_id, query.message.message_id, text, parse_mode="HTML", reply_markup=keyboard)
 
+    # Force DB Backup Action
+    elif data == "admin:force_backup":
+        from services.backup_manager import backup_manager
+        success = await backup_manager.perform_backup(force=True)
+        if success:
+            await query.answer("✅ Database successfully backed up and pinned to Telegram!", show_alert=True)
+        else:
+            await query.answer("⚠️ Backup skipped or failed (check logs/BACKUP_CHAT_ID).", show_alert=True)
+        text, keyboard = await _build_diagnostics_menu()
+        await safe_edit_message_text(bot, user_id, query.message.message_id, text, parse_mode="HTML", reply_markup=keyboard)
+
     # Close Menu Safely
     elif data == "admin:close":
         await fsm.clear_state(user_id)
@@ -486,6 +497,7 @@ async def _build_queue_menu() -> tuple[str, InlineKeyboardMarkup]:
     return text, InlineKeyboardMarkup(keyboard_buttons)
 
 async def _build_diagnostics_menu() -> tuple[str, InlineKeyboardMarkup]:
+    from services.backup_manager import backup_manager, BACKUP_CHAT_ID
     fsm_cache_size = len(fsm._cache)
     locks_size = len(fsm._locks)
     
@@ -497,6 +509,10 @@ async def _build_diagnostics_menu() -> tuple[str, InlineKeyboardMarkup]:
         async with conn.execute("SELECT COUNT(*) FROM posting_queue WHERE status = 'failed'") as cursor:
             failed_posts = (await cursor.fetchone())[0]
 
+    backup_status = "Configured 🟢" if BACKUP_CHAT_ID else "Not Configured 🔴"
+    last_hash = backup_manager.last_backup_hash[:10] if backup_manager.last_backup_hash else "None"
+    restored_label = "Yes 🟢" if backup_manager.restored_successfully else "No/Fresh ⚪️"
+
     text = (
         "📊 <b>System Diagnostics & Metrics</b>\n\n"
         f"• <b>FSM Session Cache:</b> {fsm_cache_size} active user(s)\n"
@@ -504,7 +520,13 @@ async def _build_diagnostics_menu() -> tuple[str, InlineKeyboardMarkup]:
         f"• <b>Persistent Translation Cache:</b> {cache_rows} record(s)\n"
         f"• <b>Successful Queue Posts:</b> {sent_posts} post(s)\n"
         f"• <b>Failed Queue Posts:</b> {failed_posts} post(s)\n"
+        f"• <b>Backup Channel:</b> {backup_status}\n"
+        f"• <b>Restored on Boot:</b> {restored_label}\n"
+        f"• <b>Last Backup Hash:</b> <code>{last_hash}</code>\n"
         f"• <b>Engine Status:</b> 100% Async Operational 🚀"
     )
-    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Back to Main Menu", callback_data="admin:panel")]])
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("💾 Backup Database Now", callback_data="admin:force_backup")],
+        [InlineKeyboardButton("◀️ Back to Main Menu", callback_data="admin:panel")]
+    ])
     return text, keyboard

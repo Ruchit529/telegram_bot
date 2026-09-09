@@ -114,6 +114,17 @@ class DatabaseManager:
         await self.set_setting_default("footer_enabled", "1")
         logger.info("Database initialized successfully.")
 
+    async def checkpoint(self):
+        """Flushes Write-Ahead Logging (WAL) data to the main SQLite database file."""
+        if not os.path.exists(self.db_path):
+            return
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+            logger.debug("Database WAL checkpoint (TRUNCATE) completed successfully.")
+        except Exception as e:
+            logger.error(f"Error checkpointing database WAL: {e}")
+
     # --- System Settings Operations ---
     async def get_setting(self, key: str, default: str = "") -> str:
         async with aiosqlite.connect(self.db_path) as db:
