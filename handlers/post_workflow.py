@@ -1,3 +1,4 @@
+import asyncio
 import html
 import json
 import os
@@ -18,11 +19,82 @@ from handlers.error_handler import (
     safe_edit_message_caption, safe_delete_message, safe_send_message
 )
 
+# In-memory dictionary for collecting media groups / albums from administrators
+_media_group_buffers: dict = {}
+_media_group_lock = asyncio.Lock()
+
+async def _process_media_group(media_group_id: str, bot, user_id: int):
+    """Waits for all media messages in an album to arrive, then builds a single unified draft preview."""
+    try:
+        await asyncio.sleep(0.7)  # Wait 700ms for all messages in the media group to arrive
+        
+        async with _media_group_lock:
+            data = _media_group_buffers.pop(media_group_id, None)
+        
+        if not data:
+            return
+        
+        messages = data.get("messages", [])
+        if not messages:
+            return
+
+        caption_html = ""
+        media_items = []
+        
+        for msg in messages:
+            if msg.caption_html and not caption_html:
+                caption_html = msg.caption_html
+            if msg.photo:
+                media_items.append({"type": "photo", "file_id": msg.photo[-1].file_id})
+            elif msg.video:
+                media_items.append({"type": "video", "file_id": msg.video.file_id})
+
+        if not media_items:
+            return
+
+        original_text = caption_html
+        media_type = "album" if len(media_items) > 1 else media_items[0]["type"]
+        media_file_id = json.dumps(media_items) if len(media_items) > 1 else media_items[0]["file_id"]
+
+        # Translate caption to English
+        translated_text, detected_lang, was_translated = await translation_service.translate_html(original_text)
+
+        # Clean up previous preview message if any
+        _, old_data = await fsm.get_state(user_id)
+        old_preview_id = old_data.get("preview_message_id")
+        if old_preview_id:
+            await safe_delete_message(bot, user_id, old_preview_id)
+
+        draft_data = {
+            "user_id": user_id,
+            "original_text": original_text,
+            "translated_text": translated_text,
+            "media_file_id": media_file_id,
+            "media_type": media_type,
+            "media_items": media_items,
+            "detected_lang": detected_lang,
+            "was_translated": was_translated,
+            "footer_enabled": True,       # Enabled by default
+            "silent_mode": False,         # Loud notifications by default
+            "buttons_config": [],         # Inline URL buttons
+            "preview_message_id": None,
+            "sched_menu_state": None,     # Scheduling sub-menu state
+            "sched_category": None        # Scheduled target group
+        }
+
+        # Set FSM to Preview state
+        await fsm.set_state(user_id, States.PREVIEW_GENERATED, draft_data)
+
+        # Generate and send dynamic preview message
+        await _send_new_preview(bot, user_id, draft_data)
+    except Exception as e:
+        logger.error(f"Error in _process_media_group: {e}", exc_info=True)
+
 @safe_handler
 @admin_only
 async def handle_incoming_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Ingests raw incoming posts (text, photo, or video) from administrators.
+    Ingests raw incoming posts (text, photo, video, or multi-photo album) from administrators.
     Triggers immediate language auto-translation and displays the Dynamic Preview.
     """
     user_id = update.effective_user.id
@@ -31,16 +103,29 @@ async def handle_incoming_post(update: Update, context: ContextTypes.DEFAULT_TYP
     # Block ingestion if admin is in the middle of a configuration FSM state
     current_state, _ = await fsm.get_state(user_id)
     if current_state in ["AWAITING_ADD_CHANNEL", "AWAITING_REMOVE_CHANNEL", "AWAITING_SET_FOOTER_TITLE", "AWAITING_ADD_FOOTER_CHANNEL", "AWAITING_REMOVE_FOOTER_CHANNEL"]:
-        # Let the admin config handler deal with it
         return
 
     # Delete the incoming admin message to keep clean interaction workspace
     await safe_delete_message(bot, user_id, update.message.message_id)
 
-    # 1. Parse and extract post content
+    # Handle albums / media groups
+    media_group_id = update.message.media_group_id
+    if media_group_id:
+        async with _media_group_lock:
+            if media_group_id not in _media_group_buffers:
+                _media_group_buffers[media_group_id] = {
+                    "messages": [update.message],
+                    "task": asyncio.create_task(_process_media_group(media_group_id, bot, user_id))
+                }
+            else:
+                _media_group_buffers[media_group_id]["messages"].append(update.message)
+        return
+
+    # 1. Parse and extract single post content
     original_text = ""
     media_file_id = None
     media_type = "text"
+    media_items = []
 
     if update.message.photo:
         media_type = "photo"
@@ -165,7 +250,7 @@ async def post_callback_router(update: Update, context: ContextTypes.DEFAULT_TYP
 
         if base_url.startswith("https://"):
             encoded_caption = urllib.parse.quote(current_caption)
-            editor_url = f"{base_url}/editor?text={encoded_caption}"
+            editor_url = f"{base_url}/editor?user_id={user_id}&text={encoded_caption}"
 
             keyboard = InlineKeyboardMarkup([
                 [InlineKeyboardButton("📱 Open Web Editor", web_app=WebAppInfo(url=editor_url))],
@@ -742,24 +827,25 @@ async def _send_new_preview(bot, user_id: int, draft: dict):
     keyboard = await _build_preview_markup(draft)
 
     # Formatting header indicator based on FSM scheduling state
+    album_info = f" (Album: {len(draft.get('media_items', []))} media)" if draft.get("media_type") == "album" else ""
     sched_state = draft.get("sched_menu_state")
     if sched_state == "target_select":
         header = (
-            f"<b>✨ SCHEDULE POST ➡️ SELECT GROUP</b>\n"
+            f"<b>✨ SCHEDULE POST ➡️ SELECT GROUP{album_info}</b>\n"
             f"<i>Please choose the target channel group below.</i>\n"
             f"━━━━━━━━━━━━━━━━━━━\n\n"
         )
     elif sched_state == "delay_select":
         cat_name = draft.get("sched_category", "vanced").upper()
         header = (
-            f"<b>✨ SCHEDULE POST ➡️ SELECT DELAY</b>\n"
+            f"<b>✨ SCHEDULE POST ➡️ SELECT DELAY{album_info}</b>\n"
             f"<i>Target Group: {cat_name}</i>\n"
             f"<i>Please select the publishing delay or specify custom duration.</i>\n"
             f"━━━━━━━━━━━━━━━━━━━\n\n"
         )
     else:
         header = (
-            f"<b>✨ DRAFT POST PREVIEW</b>\n"
+            f"<b>✨ DRAFT POST PREVIEW{album_info}</b>\n"
             f"<i>Language: {draft['detected_lang'].upper()} ➡️ EN | Translated: {'Yes' if draft['was_translated'] else 'No'}</i>\n"
             f"━━━━━━━━━━━━━━━━━━━\n\n"
         )
@@ -792,6 +878,38 @@ async def _send_new_preview(bot, user_id: int, draft: dict):
                 parse_mode="HTML",
                 reply_markup=keyboard
             )
+        elif draft["media_type"] == "album":
+            media_items = draft.get("media_items", [])
+            if not media_items and draft.get("media_file_id"):
+                try:
+                    media_items = json.loads(draft["media_file_id"])
+                except Exception:
+                    media_items = []
+            
+            first_item = media_items[0] if media_items else None
+            if first_item and first_item.get("type") == "video":
+                preview_msg = await bot.send_video(
+                    chat_id=user_id,
+                    video=first_item["file_id"],
+                    caption=full_display_text,
+                    parse_mode="HTML",
+                    reply_markup=keyboard
+                )
+            elif first_item:
+                preview_msg = await bot.send_photo(
+                    chat_id=user_id,
+                    photo=first_item["file_id"],
+                    caption=full_display_text,
+                    parse_mode="HTML",
+                    reply_markup=keyboard
+                )
+            else:
+                preview_msg = await bot.send_message(
+                    chat_id=user_id,
+                    text=full_display_text,
+                    parse_mode="HTML",
+                    reply_markup=keyboard
+                )
     except Exception as e:
         logger.error(f"Failed to send initial post preview: {e}", exc_info=True)
         try:
@@ -820,24 +938,25 @@ async def _update_existing_preview(bot, user_id: int, draft: dict):
     parse_text = await _compile_final_text(draft, category="vanced")
     keyboard = await _build_preview_markup(draft)
 
+    album_info = f" (Album: {len(draft.get('media_items', []))} media)" if draft.get("media_type") == "album" else ""
     sched_state = draft.get("sched_menu_state")
     if sched_state == "target_select":
         header = (
-            f"<b>✨ SCHEDULE POST ➡️ SELECT GROUP</b>\n"
+            f"<b>✨ SCHEDULE POST ➡️ SELECT GROUP{album_info}</b>\n"
             f"<i>Please choose the target channel group below.</i>\n"
             f"━━━━━━━━━━━━━━━━━━━\n\n"
         )
     elif sched_state == "delay_select":
         cat_name = draft.get("sched_category", "vanced").upper()
         header = (
-            f"<b>✨ SCHEDULE POST ➡️ SELECT DELAY</b>\n"
+            f"<b>✨ SCHEDULE POST ➡️ SELECT DELAY{album_info}</b>\n"
             f"<i>Target Group: {cat_name}</i>\n"
             f"<i>Please select the publishing delay or specify custom duration.</i>\n"
             f"━━━━━━━━━━━━━━━━━━━\n\n"
         )
     else:
         header = (
-            f"<b>✨ DRAFT POST PREVIEW</b>\n"
+            f"<b>✨ DRAFT POST PREVIEW{album_info}</b>\n"
             f"<i>Language: {draft['detected_lang'].upper()} ➡️ EN | Translated: {'Yes' if draft['was_translated'] else 'No'}</i>\n"
             f"━━━━━━━━━━━━━━━━━━━\n\n"
         )

@@ -1,7 +1,8 @@
 import asyncio
 import time
+import json
 from typing import Dict, Any, Optional
-from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, InputMediaVideo
 from telegram.error import TelegramError, RetryAfter, TimedOut, NetworkError, BadRequest, Forbidden
 
 from config import (
@@ -137,6 +138,40 @@ class QueueManager:
                     reply_markup=reply_markup,
                     disable_notification=disable_notification
                 )
+            elif media_type == "album":
+                try:
+                    media_items = json.loads(media_file_id) if isinstance(media_file_id, str) else media_file_id
+                except Exception:
+                    media_items = []
+
+                if not media_items:
+                    raise ValueError(f"No media items found for album: {media_file_id}")
+
+                media_group = []
+                for idx, item in enumerate(media_items):
+                    # Attach the translated text/caption to the first media item in the group
+                    item_caption = text if idx == 0 else None
+                    parse_mode = "HTML" if idx == 0 else None
+                    if item.get("type") == "video":
+                        media_group.append(InputMediaVideo(media=item["file_id"], caption=item_caption, parse_mode=parse_mode))
+                    else:
+                        media_group.append(InputMediaPhoto(media=item["file_id"], caption=item_caption, parse_mode=parse_mode))
+
+                await self.bot.send_media_group(
+                    chat_id=channel_id,
+                    media=media_group,
+                    disable_notification=disable_notification
+                )
+
+                # If inline custom buttons exist, send an attached message with buttons below the album
+                if reply_markup:
+                    await self.bot.send_message(
+                        chat_id=channel_id,
+                        text="👇 <b>Links & Resources:</b>",
+                        parse_mode="HTML",
+                        reply_markup=reply_markup,
+                        disable_notification=disable_notification
+                    )
             else:
                 raise ValueError(f"Unsupported media type: {media_type}")
 
